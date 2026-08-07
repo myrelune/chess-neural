@@ -13,6 +13,7 @@ struct Undo {
     uint8_t castlingRights;
     Square enPassantSquare;
     int halfmoveClock;
+    uint64_t zobristKey;  // saved before the move so unmakeMove can restore it instantly
 };
 
 class Board {
@@ -50,12 +51,18 @@ public:
 
     bool isSquareAttacked(Square square, Color attackerColor) const;
 
+    uint64_t getZobristKey() const { return zobristKey; }
+
+    void makeNullMove(Undo& undo);
+    void unmakeNullMove(const Undo& undo);
+
 private:
     static constexpr size_t pieceIndex(Piece piece) {
         return static_cast<size_t>(piece) - 1;
     }
 
     Bitboard pieces[12];
+    Piece   mailbox[64]; // O(1) square-to-piece lookup
 
     Bitboard whitePieces;
     Bitboard blackPieces;
@@ -67,4 +74,13 @@ private:
 
     int halfmoveClock;
     int fullmoveNumber;
+    uint64_t zobristKey;
+
+    uint64_t computeZobristKey() const; // only used during loadFEN / reset
+
+    // Incremental Zobrist helpers
+    inline void zxorPiece(Piece p, int sq);
+    inline void zxorCastling(uint8_t rights);
+    inline void zxorEP(Square sq);
+    inline void zxorSide();
 };

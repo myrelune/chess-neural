@@ -206,23 +206,13 @@ namespace Tables {
     void initTables() {
         for (int p = 1; p <= 12; p++) {
             Piece piece = static_cast<Piece>(p);
-
             int base = basePiece(piece);
 
             for (int sq = 0; sq < 64; sq++) {
-                int tableSquare = sq;
+                int tableSquare = (p < static_cast<int>(Piece::BlackPawn)) ? (sq ^ 56) : sq;
 
-                // Flip black pieces vertically
-                if (p >= static_cast<int>(Piece::BlackPawn))
-                    tableSquare ^= 56;
-
-                mgTable[p][sq] =
-                    mgValue[base] +
-                    mgPestoTable[base][tableSquare];
-
-                egTable[p][sq] =
-                    egValue[base] +
-                    egPestoTable[base][tableSquare];
+                mgTable[p][sq] = mgValue[base] + mgPestoTable[base][tableSquare];
+                egTable[p][sq] = egValue[base] + egPestoTable[base][tableSquare];
             }
         }
     }

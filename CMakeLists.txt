@@ -14,4 +14,6 @@ add_executable(
     src/eval/evaluate.cpp
     src/eval/tables.cpp
     src/attacks/attacks.cpp
+    src/search/searcher.cpp
+    src/zobrist/zobrist.cpp
 )

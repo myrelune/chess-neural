@@ -1,10 +1,29 @@
 #include "board.h"
 #include "bitboard.h"
+#include "../zobrist/zobrist.h"
 
 #include <iostream>
 #include <sstream>
 #include <cctype>
 
+// ---------------------------------------------------------------------------
+// Incremental Zobrist helpers — tiny private methods so callsites stay clean
+// ---------------------------------------------------------------------------
+inline void Board::zxorPiece(Piece p, int sq) {
+    zobristKey ^= Zobrist::pieceKeys[pieceIndex(p)][sq];
+}
+inline void Board::zxorCastling(uint8_t rights) {
+    zobristKey ^= Zobrist::castlingKeys[rights];
+}
+inline void Board::zxorEP(Square sq) {
+    if (sq != Square::None)
+        zobristKey ^= Zobrist::epKeys[static_cast<int>(sq) % 8];
+}
+inline void Board::zxorSide() {
+    zobristKey ^= Zobrist::sideKey;
+}
+
+// ---------------------------------------------------------------------------
 Board::Board() {
     reset();
 }
@@ -12,6 +31,9 @@ Board::Board() {
 void Board::clear() {
     for (int i = 0; i < 12; i++)
         pieces[i] = 0;
+
+    for (int i = 0; i < 64; i++)
+        mailbox[i] = Piece::None;
 
     whitePieces = 0;
     blackPieces = 0;
@@ -23,6 +45,7 @@ void Board::clear() {
 
     halfmoveClock = 0;
     fullmoveNumber = 1;
+    zobristKey = 0;
 }
 
 void Board::reset() {
@@ -74,8 +97,14 @@ void Board::reset() {
         WhiteQueenSide |
         BlackKingSide |
         BlackQueenSide;
+
+    zobristKey = computeZobristKey();
 }
 
+// ---------------------------------------------------------------------------
+// Low-level piece placement — keeps bitboards + mailbox in sync.
+// NOTE: does NOT touch zobristKey; callers handle Zobrist incrementally.
+// ---------------------------------------------------------------------------
 void Board::setPiece(Square square, Piece piece) {
     if (piece == Piece::None)
         return;
@@ -83,6 +112,7 @@ void Board::setPiece(Square square, Piece piece) {
     int sq = static_cast<int>(square);
 
     BitboardOps::setBit(pieces[pieceIndex(piece)], sq);
+    mailbox[sq] = piece;
 
     if (pieceColor(piece) == Color::White)
         BitboardOps::setBit(whitePieces, sq);
@@ -92,29 +122,23 @@ void Board::setPiece(Square square, Piece piece) {
     BitboardOps::setBit(occupied, sq);
 }
 
+// O(1) — just read the mailbox
 Piece Board::pieceAt(Square square) const {
     int sq = static_cast<int>(square);
-
     if (sq < 0 || sq >= 64)
         return Piece::None;
-
-    for (int i = 0; i < 12; i++) {
-        if (BitboardOps::getBit(pieces[i], sq))
-            return static_cast<Piece>(i + 1);
-    }
-
-    return Piece::None;
+    return mailbox[sq];
 }
 
 void Board::removePiece(Square square) {
-    Piece piece = pieceAt(square);
+    int sq = static_cast<int>(square);
+    Piece piece = mailbox[sq];
 
     if (piece == Piece::None)
         return;
 
-    int sq = static_cast<int>(square);
-
     BitboardOps::popBit(pieces[pieceIndex(piece)], sq);
+    mailbox[sq] = Piece::None;
 
     if (pieceColor(piece) == Color::White)
         BitboardOps::popBit(whitePieces, sq);
@@ -235,85 +259,129 @@ void Board::loadFEN(const std::string& fen) {
 
     try { halfmoveClock = std::stoi(halfmove); } catch (...) { halfmoveClock = 0; }
     try { fullmoveNumber = std::stoi(fullmove); } catch (...) { fullmoveNumber = 1; }
+
+    // Full recompute once after loading — all subsequent updates are incremental
+    zobristKey = computeZobristKey();
 }
 
+// ---------------------------------------------------------------------------
+// makeMove — fully incremental Zobrist updates, O(1) pieceAt via mailbox
+// ---------------------------------------------------------------------------
 bool Board::makeMove(const Move& move, Undo& undo) {
-    undo.castlingRights = castlingRights;
+    // Save full state needed for unmake
+    undo.castlingRights  = castlingRights;
     undo.enPassantSquare = enPassantSquare;
-    undo.halfmoveClock = halfmoveClock;
-    undo.capturedPiece = Piece::None;
-    undo.capturedSquare = move.to;
+    undo.halfmoveClock   = halfmoveClock;
+    undo.capturedPiece   = Piece::None;
+    undo.capturedSquare  = move.to;
+    undo.zobristKey      = zobristKey; // single save — unmakeMove just restores this
 
-    Piece movingPiece = pieceAt(move.from);
+    Piece movingPiece = mailbox[static_cast<int>(move.from)];
     if (movingPiece == Piece::None) return false;
 
-    Piece targetPiece = pieceAt(move.to);
+    Piece targetPiece = mailbox[static_cast<int>(move.to)];
+
+    // --- Incremental Zobrist: strip out everything that's about to change ---
+
+    // Side key flips every move
+    zxorSide();
+
+    // Old castling rights
+    zxorCastling(castlingRights);
+
+    // Old en passant file (if any)
+    zxorEP(enPassantSquare);
+
+    // Moving piece leaves its source square
+    zxorPiece(movingPiece, static_cast<int>(move.from));
 
     // Handle captures
     if (targetPiece != Piece::None) {
         undo.capturedPiece = targetPiece;
+        zxorPiece(targetPiece, static_cast<int>(move.to));
         removePiece(move.to);
     }
-    // Handle En Passant capture
-    else if ((movingPiece == Piece::WhitePawn || movingPiece == Piece::BlackPawn) && move.to == enPassantSquare) {
-        Square epPawnSquare = (sideToMove == Color::White) ?
-            static_cast<Square>(static_cast<int>(move.to) - 8) :
-            static_cast<Square>(static_cast<int>(move.to) + 8);
+    // Handle en passant capture
+    else if ((movingPiece == Piece::WhitePawn || movingPiece == Piece::BlackPawn)
+             && move.to == enPassantSquare) {
+        Square epPawnSquare = (sideToMove == Color::White)
+            ? static_cast<Square>(static_cast<int>(move.to) - 8)
+            : static_cast<Square>(static_cast<int>(move.to) + 8);
         undo.capturedSquare = epPawnSquare;
-        undo.capturedPiece = pieceAt(epPawnSquare);
+        undo.capturedPiece  = mailbox[static_cast<int>(epPawnSquare)];
+        zxorPiece(undo.capturedPiece, static_cast<int>(epPawnSquare));
         removePiece(epPawnSquare);
     }
 
     // Move primary piece
     removePiece(move.from);
-    setPiece(move.to, move.promotion != Piece::None ? move.promotion : movingPiece);
+    Piece placedPiece = (move.promotion != Piece::None) ? move.promotion : movingPiece;
+    setPiece(move.to, placedPiece);
+    zxorPiece(placedPiece, static_cast<int>(move.to));
 
-    // Handle Castling Rook move
+    // Handle castling rook
     if (movingPiece == Piece::WhiteKing) {
         if (move.from == Square::E1 && move.to == Square::G1) {
+            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::H1));
             removePiece(Square::H1);
             setPiece(Square::F1, Piece::WhiteRook);
+            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::F1));
         } else if (move.from == Square::E1 && move.to == Square::C1) {
+            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::A1));
             removePiece(Square::A1);
             setPiece(Square::D1, Piece::WhiteRook);
+            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::D1));
         }
     } else if (movingPiece == Piece::BlackKing) {
         if (move.from == Square::E8 && move.to == Square::G8) {
+            zxorPiece(Piece::BlackRook, static_cast<int>(Square::H8));
             removePiece(Square::H8);
             setPiece(Square::F8, Piece::BlackRook);
+            zxorPiece(Piece::BlackRook, static_cast<int>(Square::F8));
         } else if (move.from == Square::E8 && move.to == Square::C8) {
+            zxorPiece(Piece::BlackRook, static_cast<int>(Square::A8));
             removePiece(Square::A8);
             setPiece(Square::D8, Piece::BlackRook);
+            zxorPiece(Piece::BlackRook, static_cast<int>(Square::D8));
         }
     }
 
-    // Reset or update En Passant square
+    // Update en passant square
     enPassantSquare = Square::None;
-    if (movingPiece == Piece::WhitePawn && static_cast<int>(move.to) - static_cast<int>(move.from) == 16) {
+    if (movingPiece == Piece::WhitePawn
+        && static_cast<int>(move.to) - static_cast<int>(move.from) == 16) {
         enPassantSquare = static_cast<Square>(static_cast<int>(move.from) + 8);
-    } else if (movingPiece == Piece::BlackPawn && static_cast<int>(move.from) - static_cast<int>(move.to) == 16) {
+    } else if (movingPiece == Piece::BlackPawn
+               && static_cast<int>(move.from) - static_cast<int>(move.to) == 16) {
         enPassantSquare = static_cast<Square>(static_cast<int>(move.from) - 8);
     }
 
-    if (movingPiece == Piece::WhiteKing) {
+    // Update castling rights
+    if (movingPiece == Piece::WhiteKing)
         castlingRights &= ~(WhiteKingSide | WhiteQueenSide);
-    } else if (movingPiece == Piece::BlackKing) {
+    else if (movingPiece == Piece::BlackKing)
         castlingRights &= ~(BlackKingSide | BlackQueenSide);
-    }
 
     if (move.from == Square::A1 || move.to == Square::A1) castlingRights &= ~WhiteQueenSide;
     if (move.from == Square::H1 || move.to == Square::H1) castlingRights &= ~WhiteKingSide;
     if (move.from == Square::A8 || move.to == Square::A8) castlingRights &= ~BlackQueenSide;
     if (move.from == Square::H8 || move.to == Square::H8) castlingRights &= ~BlackKingSide;
 
+    // XOR in the new castling rights and new EP
+    zxorCastling(castlingRights);
+    zxorEP(enPassantSquare);
+
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// unmakeMove — restore Zobrist key from Undo in one assignment (zero recompute)
+// ---------------------------------------------------------------------------
 void Board::unmakeMove(const Move& move, const Undo& undo) {
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
 
-    Piece movedPiece = pieceAt(move.to);
+    Piece movedPiece = mailbox[static_cast<int>(move.to)];
 
     if (move.promotion != Piece::None) {
         removePiece(move.to);
@@ -324,7 +392,7 @@ void Board::unmakeMove(const Move& move, const Undo& undo) {
         setPiece(move.from, movedPiece);
     }
 
-    // Restore Rook if castling
+    // Restore rook if castling
     if (movedPiece == Piece::WhiteKing) {
         if (move.from == Square::E1 && move.to == Square::G1) {
             removePiece(Square::F1);
@@ -347,28 +415,28 @@ void Board::unmakeMove(const Move& move, const Undo& undo) {
         setPiece(undo.capturedSquare, undo.capturedPiece);
     }
 
-    castlingRights = undo.castlingRights;
+    castlingRights  = undo.castlingRights;
     enPassantSquare = undo.enPassantSquare;
-    halfmoveClock = undo.halfmoveClock;
+    halfmoveClock   = undo.halfmoveClock;
+    zobristKey      = undo.zobristKey; // O(1) restore — no recompute needed
 }
 
+// ---------------------------------------------------------------------------
 bool Board::isSquareAttacked(Square square, Color attackerColor) const {
-    int targetIdx = static_cast<int>(square);
+    int targetIdx  = static_cast<int>(square);
     int targetRank = targetIdx / 8;
     int targetFile = targetIdx % 8;
 
     // Pawn attacks
     if (attackerColor == Color::White) {
-        Piece attackerPawn = Piece::WhitePawn;
-        Bitboard pawns = getPieces(attackerPawn);
+        Bitboard pawns = getPieces(Piece::WhitePawn);
         int pawnR = targetRank - 1;
         if (pawnR >= 0) {
             if (targetFile > 0 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile - 1))) return true;
             if (targetFile < 7 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile + 1))) return true;
         }
     } else {
-        Piece attackerPawn = Piece::BlackPawn;
-        Bitboard pawns = getPieces(attackerPawn);
+        Bitboard pawns = getPieces(Piece::BlackPawn);
         int pawnR = targetRank + 1;
         if (pawnR < 8) {
             if (targetFile > 0 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile - 1))) return true;
@@ -400,17 +468,15 @@ bool Board::isSquareAttacked(Square square, Color attackerColor) const {
         }
     }
 
-    // Straight Sliders (Rook / Queen)
-    Piece attackerRook = (attackerColor == Color::White) ? Piece::WhiteRook : Piece::BlackRook;
+    // Straight sliders (Rook / Queen)
+    Piece attackerRook  = (attackerColor == Color::White) ? Piece::WhiteRook  : Piece::BlackRook;
     Piece attackerQueen = (attackerColor == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen;
     Bitboard straightSliders = getPieces(attackerRook) | getPieces(attackerQueen);
     constexpr int rookOffsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
     for (auto& offset : rookOffsets) {
-        int r = targetRank;
-        int f = targetFile;
+        int r = targetRank, f = targetFile;
         while (true) {
-            r += offset[0];
-            f += offset[1];
+            r += offset[0]; f += offset[1];
             if (r < 0 || r > 7 || f < 0 || f > 7) break;
             int sq = r * 8 + f;
             if (BitboardOps::getBit(occupied, sq)) {
@@ -420,16 +486,14 @@ bool Board::isSquareAttacked(Square square, Color attackerColor) const {
         }
     }
 
-    // Diagonal Sliders (Bishop / Queen)
+    // Diagonal sliders (Bishop / Queen)
     Piece attackerBishop = (attackerColor == Color::White) ? Piece::WhiteBishop : Piece::BlackBishop;
     Bitboard diagSliders = getPieces(attackerBishop) | getPieces(attackerQueen);
     constexpr int bishopOffsets[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
     for (auto& offset : bishopOffsets) {
-        int r = targetRank;
-        int f = targetFile;
+        int r = targetRank, f = targetFile;
         while (true) {
-            r += offset[0];
-            f += offset[1];
+            r += offset[0]; f += offset[1];
             if (r < 0 || r > 7 || f < 0 || f > 7) break;
             int sq = r * 8 + f;
             if (BitboardOps::getBit(occupied, sq)) {
@@ -440,4 +504,53 @@ bool Board::isSquareAttacked(Square square, Color attackerColor) const {
     }
 
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Full Zobrist recompute — only called from reset() and loadFEN()
+// ---------------------------------------------------------------------------
+uint64_t Board::computeZobristKey() const {
+    uint64_t key = 0;
+
+    for (int sq = 0; sq < 64; ++sq) {
+        Piece p = mailbox[sq];
+        if (p != Piece::None)
+            key ^= Zobrist::pieceKeys[pieceIndex(p)][sq];
+    }
+
+    key ^= Zobrist::castlingKeys[castlingRights];
+
+    if (enPassantSquare != Square::None)
+        key ^= Zobrist::epKeys[static_cast<int>(enPassantSquare) % 8];
+
+    if (sideToMove == Color::Black)
+        key ^= Zobrist::sideKey;
+
+    return key;
+}
+
+// ---------------------------------------------------------------------------
+void Board::makeNullMove(Undo& undo) {
+    undo.castlingRights  = castlingRights;
+    undo.enPassantSquare = enPassantSquare;
+    undo.halfmoveClock   = halfmoveClock;
+    undo.capturedPiece   = Piece::None;
+    undo.capturedSquare  = Square::None;
+    undo.zobristKey      = zobristKey;
+
+    // Incremental: remove EP, flip side
+    zxorEP(enPassantSquare);
+    enPassantSquare = Square::None;
+    zxorSide();
+
+    sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
+}
+
+void Board::unmakeNullMove(const Undo& undo) {
+    sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
+
+    castlingRights  = undo.castlingRights;
+    enPassantSquare = undo.enPassantSquare;
+    halfmoveClock   = undo.halfmoveClock;
+    zobristKey      = undo.zobristKey;
 }
