@@ -31,6 +31,7 @@ namespace BitboardOps {
     }
 
     inline int getLSB(Bitboard bb) {
+        if (bb == 0) return 0;
         #if defined(_MSC_VER)
             unsigned long index;
             _BitScanForward64(&index, bb);

@@ -1,6 +1,8 @@
 #include "board.h"
 #include "bitboard.h"
 #include "../zobrist/zobrist.h"
+#include "../attacks/attacks.h"
+#include <vector>
 
 #include <iostream>
 #include <sstream>
@@ -46,6 +48,7 @@ void Board::clear() {
     halfmoveClock = 0;
     fullmoveNumber = 1;
     zobristKey = 0;
+    posHistory.clear();
 }
 
 void Board::reset() {
@@ -372,6 +375,7 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     zxorEP(enPassantSquare);
 
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
+    posHistory.push_back(zobristKey);
     return true;
 }
 
@@ -419,91 +423,37 @@ void Board::unmakeMove(const Move& move, const Undo& undo) {
     enPassantSquare = undo.enPassantSquare;
     halfmoveClock   = undo.halfmoveClock;
     zobristKey      = undo.zobristKey; // O(1) restore — no recompute needed
+    if (!posHistory.empty()) posHistory.pop_back();
 }
 
 // ---------------------------------------------------------------------------
-bool Board::isSquareAttacked(Square square, Color attackerColor) const {
-    int targetIdx  = static_cast<int>(square);
-    int targetRank = targetIdx / 8;
-    int targetFile = targetIdx % 8;
-
-    // Pawn attacks
-    if (attackerColor == Color::White) {
-        Bitboard pawns = getPieces(Piece::WhitePawn);
-        int pawnR = targetRank - 1;
-        if (pawnR >= 0) {
-            if (targetFile > 0 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile - 1))) return true;
-            if (targetFile < 7 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile + 1))) return true;
+bool Board::isRepetition() const {
+    // Current position key = zobristKey.
+    // Check if it has appeared at least once before in history (twofold = draw)
+    int count = 0;
+    for (int i = (int)posHistory.size() - 2; i >= 0; i -= 2) {
+        if (posHistory[i] == zobristKey) {
+            count++;
+            if (count >= 1) return true; // twofold repetition
         }
-    } else {
-        Bitboard pawns = getPieces(Piece::BlackPawn);
-        int pawnR = targetRank + 1;
-        if (pawnR < 8) {
-            if (targetFile > 0 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile - 1))) return true;
-            if (targetFile < 7 && BitboardOps::getBit(pawns, pawnR * 8 + (targetFile + 1))) return true;
-        }
+        // Stop looking back past irreversible moves (pawn move / capture resets halfmove clock)
+        // we approximate this by limiting to halfmoveClock plies back
+        if ((int)posHistory.size() - i > halfmoveClock + 1) break;
     }
-
-    // Knight attacks
-    Piece attackerKnight = (attackerColor == Color::White) ? Piece::WhiteKnight : Piece::BlackKnight;
-    Bitboard knights = getPieces(attackerKnight);
-    constexpr int knightOffsets[8][2] = {{-2, -1}, {-2, 1}, {-1, -2}, {-1, 2}, {1, -2}, {1, 2}, {2, -1}, {2, 1}};
-    for (auto& offset : knightOffsets) {
-        int r = targetRank + offset[0];
-        int f = targetFile + offset[1];
-        if (r >= 0 && r < 8 && f >= 0 && f < 8) {
-            if (BitboardOps::getBit(knights, r * 8 + f)) return true;
-        }
-    }
-
-    // King attacks
-    Piece attackerKing = (attackerColor == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
-    Bitboard kings = getPieces(attackerKing);
-    constexpr int kingOffsets[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-    for (auto& offset : kingOffsets) {
-        int r = targetRank + offset[0];
-        int f = targetFile + offset[1];
-        if (r >= 0 && r < 8 && f >= 0 && f < 8) {
-            if (BitboardOps::getBit(kings, r * 8 + f)) return true;
-        }
-    }
-
-    // Straight sliders (Rook / Queen)
-    Piece attackerRook  = (attackerColor == Color::White) ? Piece::WhiteRook  : Piece::BlackRook;
-    Piece attackerQueen = (attackerColor == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen;
-    Bitboard straightSliders = getPieces(attackerRook) | getPieces(attackerQueen);
-    constexpr int rookOffsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (auto& offset : rookOffsets) {
-        int r = targetRank, f = targetFile;
-        while (true) {
-            r += offset[0]; f += offset[1];
-            if (r < 0 || r > 7 || f < 0 || f > 7) break;
-            int sq = r * 8 + f;
-            if (BitboardOps::getBit(occupied, sq)) {
-                if (BitboardOps::getBit(straightSliders, sq)) return true;
-                break;
-            }
-        }
-    }
-
-    // Diagonal sliders (Bishop / Queen)
-    Piece attackerBishop = (attackerColor == Color::White) ? Piece::WhiteBishop : Piece::BlackBishop;
-    Bitboard diagSliders = getPieces(attackerBishop) | getPieces(attackerQueen);
-    constexpr int bishopOffsets[4][2] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
-    for (auto& offset : bishopOffsets) {
-        int r = targetRank, f = targetFile;
-        while (true) {
-            r += offset[0]; f += offset[1];
-            if (r < 0 || r > 7 || f < 0 || f > 7) break;
-            int sq = r * 8 + f;
-            if (BitboardOps::getBit(occupied, sq)) {
-                if (BitboardOps::getBit(diagSliders, sq)) return true;
-                break;
-            }
-        }
-    }
-
     return false;
+}
+
+bool Board::isDraw() const {
+    // 50-move rule
+    if (halfmoveClock >= 100) return true;
+    // Insufficient material: only kings remain
+    Bitboard allPieces = occupied;
+    if (allPieces == (getPieces(Piece::WhiteKing) | getPieces(Piece::BlackKing))) return true;
+    return false;
+}
+
+bool Board::isSquareAttacked(Square square, Color attackerColor) const {
+    return Attacks::isSquareAttacked(*this, square, attackerColor);
 }
 
 // ---------------------------------------------------------------------------

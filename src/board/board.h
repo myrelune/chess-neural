@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "bitboard.h"
 #include "types.h"
@@ -53,6 +54,9 @@ public:
 
     uint64_t getZobristKey() const { return zobristKey; }
 
+    bool isRepetition() const;
+    bool isDraw() const;
+
     void makeNullMove(Undo& undo);
     void unmakeNullMove(const Undo& undo);
 
@@ -75,6 +79,8 @@ private:
     int halfmoveClock;
     int fullmoveNumber;
     uint64_t zobristKey;
+
+    std::vector<uint64_t> posHistory;
 
     uint64_t computeZobristKey() const; // only used during loadFEN / reset
 

@@ -15,6 +15,8 @@ namespace Uci {
 
         std::string line;
         while (std::getline(std::cin, line)) {
+            if (line.empty()) continue;
+
             std::stringstream ss(line);
             std::string token;
             ss >> token;
@@ -22,10 +24,16 @@ namespace Uci {
             if (token == "uci") {
                 std::cout << "id name NeuralDuck\n"
                           << "id author carty\n"
+                          << "option name Hash type spin default 16 min 1 max 1024\n"
+                          << "option name Threads type spin default 1 min 1 max 1\n"
                           << "uciok\n" << std::flush;
             }
             else if (token == "isready") {
                 std::cout << "readyok\n" << std::flush;
+            }
+            else if (token == "setoption") {
+                std::string restOfLine;
+                std::getline(ss, restOfLine);
             }
             else if (token == "ucinewgame") {
                 board.reset();
@@ -66,13 +74,11 @@ namespace Uci {
                         fenParts += nextToken + " ";
                         fieldCount++;
                         if (fieldCount == 6) {
-                            // Next token in stream might be "moves"
                             break;
                         }
                     }
                     board.loadFEN(fenParts);
 
-                    // If we stopped because of fieldCount == 6, check if the next token is "moves"
                     if (nextToken != "moves") {
                         ss >> nextToken;
                     }
@@ -122,18 +128,15 @@ namespace Uci {
                     int remainingTime = (side == Color::White) ? wtime : btime;
                     int increment = (side == Color::White) ? winc : binc;
 
-                    // Basic time management: target ~30 moves remaining + half increment
                     int allocated = (remainingTime / 30) + (increment / 2);
                     
-                    // Safety bounds
                     if (allocated > remainingTime - 50) allocated = remainingTime - 50;
                     if (allocated < 10) allocated = 10;
 
                     limits.moveTimeMs = allocated;
                 } 
                 else {
-                    // Fallback default search depth if 'go' is called raw
-                    limits.maxDepth = 6;
+                    limits.maxDepth = 10;
                 }
 
                 Searcher searcher;
@@ -144,6 +147,9 @@ namespace Uci {
                 } else {
                     std::cout << "bestmove 0000\n" << std::flush;
                 }
+            }
+            else if (token == "quit") {
+                break;
             }
         }
     }

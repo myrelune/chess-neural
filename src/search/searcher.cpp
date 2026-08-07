@@ -17,28 +17,40 @@ namespace {
     }
 }
 
-int Searcher::scoreMove(const Board& board, Move move, Move ttMove) {
-    // 1. Highest priority: The best move found in the Transposition Table
-    if (move == ttMove) {
-        return 30000;
+void Searcher::clearHeuristics() {
+    for (int p = 0; p < 64; p++) {
+        killerMoves[p][0] = Move();
+        killerMoves[p][1] = Move();
     }
-
-    // 2. Second priority: Move that was best in the previous iterative deepening iteration
-    if (move == bestMoveFound) {
-        return 20000;
+    for (int c = 0; c < 2; c++) {
+        for (int f = 0; f < 64; f++) {
+            for (int t = 0; t < 64; t++) {
+                historyTable[c][f][t] = 0;
+            }
+        }
     }
+}
 
-    // 3. Captures: MVV-LVA (Most Valuable Victim - Least Valuable Attacker)
+int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
+    if (move == ttMove) return 30000;
+    if (move == bestMoveFound) return 25000;
+
     Piece target = board.pieceAt(move.getToSquare());
     if (target != Piece::None) {
         Piece attacker = board.pieceAt(move.getFromSquare());
-        return 10000 + getPieceValue(target) - (getPieceValue(attacker) / 10);
+        return 20000 + getPieceValue(target) - (getPieceValue(attacker) / 10);
     }
 
-    return 0; // Quiet moves scored lower
+    if (ply < 64) {
+        if (move == killerMoves[ply][0]) return 15000;
+        if (move == killerMoves[ply][1]) return 14000;
+    }
+
+    Color side = board.getSideToMove();
+    return historyTable[static_cast<int>(side)][static_cast<int>(move.getFromSquare())][static_cast<int>(move.getToSquare())];
 }
 
-void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove) {
+void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int ply) {
     struct ScoredMove {
         Move move;
         int score;
@@ -46,7 +58,7 @@ void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove) {
 
     ScoredMove scoredMoves[256];
     for (int i = 0; i < moves.count; i++) {
-        scoredMoves[i] = { moves.moves[i], scoreMove(board, moves.moves[i], ttMove) };
+        scoredMoves[i] = { moves.moves[i], scoreMove(board, moves.moves[i], ttMove, ply) };
     }
 
     // Sort moves in descending order of score
@@ -67,16 +79,31 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     if (standPat >= beta) return beta;
     if (alpha < standPat) alpha = standPat;
 
-    MoveList moves = MoveGen::generateLegalMoves(board);
+    MoveList moves = MoveGen::generateMoves(board);
 
     for (int i = 0; i < moves.count; i++) {
         Move move = moves.moves[i];
 
-        // Quiescence Search: Only process captures
-        if (board.pieceAt(move.getToSquare()) == Piece::None) continue;
+        // Quiescence Search: Only process captures (or en passant)
+        bool isCapture = (board.pieceAt(move.getToSquare()) != Piece::None) || 
+                         ((board.pieceAt(move.getFromSquare()) == Piece::WhitePawn || board.pieceAt(move.getFromSquare()) == Piece::BlackPawn) && 
+                          move.getToSquare() == board.getEnPassantSquare() && board.getEnPassantSquare() != Square::None);
+        if (!isCapture) continue;
 
         Undo undo;
         if (!board.makeMove(move, undo)) continue;
+
+        // Check if move was legal (did it leave our king in check?)
+        Color opponentColor = board.getSideToMove();
+        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
+        Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
+        if (kingBitboard != 0) {
+            Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
+            if (board.isSquareAttacked(kingSquare, opponentColor)) {
+                board.unmakeMove(move, undo);
+                continue; // Illegal move
+            }
+        }
 
         int score = -quiescence(board, -beta, -alpha, info);
         board.unmakeMove(move, undo);
@@ -90,9 +117,12 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     return alpha;
 }
 
-int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& info) {
+int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& info, int ply) {
     info.nodes++;
     if (info.checkLimits()) return 0;
+
+    // Repetition / 50-move draw
+    if (ply > 0 && (board.isRepetition() || board.isDraw())) return 0;
 
     uint64_t key = board.getZobristKey();
     int originalAlpha = alpha;
@@ -109,11 +139,12 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
     }
 
     Color side = board.getSideToMove();
-    Square kingSq = static_cast<Square>(BitboardOps::getLSB(
-        board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing)
-    ));
-
-    bool inCheck = board.isSquareAttacked(kingSq, side == Color::White ? Color::Black : Color::White);
+    Bitboard kingBb = board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing);
+    bool inCheck = false;
+    if (kingBb != 0) {
+        Square kingSq = static_cast<Square>(BitboardOps::getLSB(kingBb));
+        inCheck = board.isSquareAttacked(kingSq, side == Color::White ? Color::Black : Color::White);
+    }
 
     if (depth >= 3 && !inCheck) {
         Bitboard nonPawnPieces = board.getPieces(side) & ~(board.getPieces(side == Color::White ? Piece::WhitePawn : Piece::BlackPawn) | board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing));
@@ -123,7 +154,7 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
             board.makeNullMove(nullUndo);
 
             int R = 2;
-            int score = -negamax(board, depth - 1 - R, -beta, -beta + 1, info);
+            int score = -negamax(board, depth - 1 - R, -beta, -beta + 1, info, ply + 1);
 
             board.unmakeNullMove(nullUndo);
 
@@ -135,33 +166,64 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         }
     }
 
-    MoveList moves = MoveGen::generateLegalMoves(board);
-
-    // Terminal node handling: Checkmate or Stalemate
-    if (moves.count == 0) {
-        Color side = board.getSideToMove();
-        Square kingSq = static_cast<Square>(BitboardOps::getLSB(
-            board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing)
-        ));
-
-        if (board.isSquareAttacked(kingSq, side == Color::White ? Color::Black : Color::White)) {
-            return -MATE_SCORE + (64 - depth); // Prefer shorter mate paths
-        }
-        return 0; // Stalemate
-    }
+    MoveList moves = MoveGen::generateMoves(board);
 
     // Pass the cached TT best move to prioritize it during move ordering
-    orderMoves(board, moves, ttBestMove);
+    orderMoves(board, moves, ttBestMove, ply);
 
     int bestScore = -INFINITY_SCORE;
-    Move currentBestMove = moves.moves[0]; // Fallback
+    Move currentBestMove = Move();
+    int legalMovesCount = 0;
 
     for (int i = 0; i < moves.count; i++) {
         Move move = moves.moves[i];
         Undo undo;
         if (!board.makeMove(move, undo)) continue;
 
-        int score = -negamax(board, depth - 1, -beta, -alpha, info);
+        // Check if move was legal (did it leave our king in check?)
+        Color opponentColor = board.getSideToMove();
+        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
+        Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
+        if (kingBitboard != 0) {
+            Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
+            if (board.isSquareAttacked(kingSquare, opponentColor)) {
+                board.unmakeMove(move, undo);
+                continue; // Illegal move
+            }
+        }
+
+        legalMovesCount++;
+
+        bool isCapture = board.pieceAt(move.getToSquare()) != Piece::None;
+        bool givesCheck = false; // approximate - skip for now
+
+        int score = 0;
+        if (legalMovesCount == 1) {
+            // Principal Variation Search: Full window search for 1st move
+            score = -negamax(board, depth - 1, -beta, -alpha, info, ply + 1);
+        } else {
+            // Late Move Reduction: reduce depth for quiet, non-checking late moves
+            int reduction = 0;
+            if (legalMovesCount >= 4 && depth >= 3 && !isCapture && !inCheck && !givesCheck
+                && move.promotion == Piece::None) {
+                reduction = 1;
+                if (legalMovesCount >= 8) reduction = depth / 3;
+            }
+
+            // Zero-window search with reduction
+            score = -negamax(board, depth - 1 - reduction, -alpha - 1, -alpha, info, ply + 1);
+
+            // Re-search full depth if LMR failed high
+            if (score > alpha && reduction > 0) {
+                score = -negamax(board, depth - 1, -alpha - 1, -alpha, info, ply + 1);
+            }
+
+            // Re-search with full window if zero-window failed high
+            if (score > alpha && score < beta) {
+                score = -negamax(board, depth - 1, -beta, -alpha, info, ply + 1);
+            }
+        }
+
         board.unmakeMove(move, undo);
 
         if (info.stopped) return 0;
@@ -176,8 +238,22 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         }
 
         if (alpha >= beta) {
+            // Store Killer move & History score for quiet moves causing beta cutoff
+            if (board.pieceAt(move.getToSquare()) == Piece::None && ply < 64) {
+                killerMoves[ply][1] = killerMoves[ply][0];
+                killerMoves[ply][0] = move;
+                historyTable[static_cast<int>(ourSide)][static_cast<int>(move.getFromSquare())][static_cast<int>(move.getToSquare())] += depth * depth;
+            }
             break; // Beta cutoff (Fail-high)
         }
+    }
+
+    // Terminal node handling: Checkmate or Stalemate
+    if (legalMovesCount == 0) {
+        if (inCheck) {
+            return -MATE_SCORE + ply; // Prefer shorter mate paths from root
+        }
+        return 0; // Stalemate
     }
 
     // STORE RESULT IN TRANSPOSITION TABLE BEFORE RETURNING
@@ -198,6 +274,7 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
 Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
     SearchInfo info;
     info.reset(limits.moveTimeMs);
+    clearHeuristics();
 
     MoveList moves = MoveGen::generateLegalMoves(board);
     if (moves.count == 0) return Move(); // Return empty move if no legal moves exist
@@ -211,14 +288,24 @@ Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
         int alpha = -INFINITY_SCORE;
         int beta = INFINITY_SCORE;
 
-        orderMoves(board, moves, bestMoveFound);
+        orderMoves(board, moves, bestMoveFound, 0);
 
         for (int i = 0; i < moves.count; i++) {
             Move move = moves.moves[i];
             Undo undo;
 
             if (!board.makeMove(move, undo)) continue;
-            int score = -negamax(board, currentDepth - 1, -beta, -alpha, info);
+
+            int score = 0;
+            if (i == 0) {
+                score = -negamax(board, currentDepth - 1, -beta, -alpha, info, 1);
+            } else {
+                score = -negamax(board, currentDepth - 1, -alpha - 1, -alpha, info, 1);
+                if (score > alpha && score < beta) {
+                    score = -negamax(board, currentDepth - 1, -beta, -alpha, info, 1);
+                }
+            }
+
             board.unmakeMove(move, undo);
 
             if (info.stopped) break; // Discard partial iteration on timeout
@@ -235,6 +322,19 @@ Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
         // Commit best move only if the current depth finished completely
         if (!info.stopped) {
             bestMoveFound = bestMoveThisDepth;
+
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - info.startTime).count();
+            uint64_t nps = elapsedMs > 0 ? (info.nodes * 1000) / elapsedMs : info.nodes;
+
+            std::cout << "info depth " << currentDepth
+                      << " score cp " << bestScoreThisDepth
+                      << " nodes " << info.nodes
+                      << " time " << elapsedMs
+                      << " nps " << nps
+                      << " pv " << moveToUci(bestMoveFound)
+                      << "\n" << std::flush;
+
             if (limits.maxNodes > 0 && info.nodes >= limits.maxNodes) break;
         } else {
             break;

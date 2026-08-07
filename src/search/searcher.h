@@ -51,7 +51,13 @@ public:
 
     void store(uint64_t key, int score, int depth, Bound bound, Move bestMove) {
         size_t index = key % numEntries;
-        table[index] = {key, score, depth, bound, bestMove};
+        const TTEntry& existing = table[index];
+
+        Move moveToStore = (bestMove != Move()) ? bestMove : (existing.key == key ? existing.bestMove : Move());
+
+        if (existing.key != key || depth >= existing.depth) {
+            table[index] = {key, score, depth, bound, moveToStore};
+        }
     }
 
     bool probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove) {
@@ -122,16 +128,21 @@ public:
 
 private:
     // Core search routines
-    int negamax(Board& board, int depth, int alpha, int beta, SearchInfo& info);
+    int negamax(Board& board, int depth, int alpha, int beta, SearchInfo& info, int ply);
     int quiescence(Board& board, int alpha, int beta, SearchInfo& info);
 
-    // Advanced move ordering helper (prioritizing TT best moves & captures)
-    void orderMoves(const Board& board, MoveList& moves, Move ttMove);
-    int scoreMove(const Board& board, Move move, Move ttMove);
+    // Advanced move ordering helper
+    void orderMoves(const Board& board, MoveList& moves, Move ttMove, int ply);
+    int scoreMove(const Board& board, Move move, Move ttMove, int ply);
+
+    void clearHeuristics();
 
     TranspositionTable tt;
     Move bestMoveFound;
     Move currentRootMove;
+
+    Move killerMoves[64][2];
+    int historyTable[2][64][64];
 };
 
 #endif // SEARCHER_H
