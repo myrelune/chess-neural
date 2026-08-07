@@ -80,18 +80,28 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     if (alpha < standPat) alpha = standPat;
 
     MoveList moves = MoveGen::generateMoves(board);
+    orderMoves(board, moves, Move(), 0);
 
     for (int i = 0; i < moves.count; i++) {
-        Move move = moves.moves[i];
+            Move move = moves.moves[i];
 
-        // Quiescence Search: Only process captures (or en passant)
-        bool isCapture = (board.pieceAt(move.getToSquare()) != Piece::None) || 
-                         ((board.pieceAt(move.getFromSquare()) == Piece::WhitePawn || board.pieceAt(move.getFromSquare()) == Piece::BlackPawn) && 
-                          move.getToSquare() == board.getEnPassantSquare() && board.getEnPassantSquare() != Square::None);
-        if (!isCapture) continue;
+            bool isCapture = (board.pieceAt(move.getToSquare()) != Piece::None) ||
+                             ((board.pieceAt(move.getFromSquare()) == Piece::WhitePawn || board.pieceAt(move.getFromSquare()) == Piece::BlackPawn) &&
+                              move.getToSquare() == board.getEnPassantSquare() && board.getEnPassantSquare() != Square::None);
+            if (!isCapture) continue;
 
-        Undo undo;
-        if (!board.makeMove(move, undo)) continue;
+            // Delta Pruning: Skip captures that can't possibly raise alpha
+            Piece target = board.pieceAt(move.getToSquare());
+            if (target != Piece::None && move.promotion == Piece::None) {
+                int capturedValue = getPieceValue(target);
+                // 200 cp safety margin for pawn promotions / minor tactics
+                if (standPat + capturedValue + 200 < alpha) {
+                    continue;
+                }
+            }
+
+            Undo undo;
+            if (!board.makeMove(move, undo)) continue;
 
         // Check if move was legal (did it leave our king in check?)
         Color opponentColor = board.getSideToMove();
@@ -127,17 +137,6 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
     uint64_t key = board.getZobristKey();
     int originalAlpha = alpha;
 
-    // PROBE TRANSPOSITION TABLE
-    Move ttBestMove = Move();
-    int ttScore = 0;
-    if (depth > 0 && tt.probe(key, depth, alpha, beta, ttScore, ttBestMove)) {
-        return ttScore; // Cache hit, Skip subtree search.
-    }
-
-    if (depth <= 0) {
-        return quiescence(board, alpha, beta, info);
-    }
-
     Color side = board.getSideToMove();
     Bitboard kingBb = board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing);
     bool inCheck = false;
@@ -146,14 +145,32 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         inCheck = board.isSquareAttacked(kingSq, side == Color::White ? Color::Black : Color::White);
     }
 
+    // PROBE TRANSPOSITION TABLE
+    Move ttBestMove = Move();
+    int ttScore = 0;
+    if (depth > 0 && tt.probe(key, depth, alpha, beta, ttScore, ttBestMove)) {
+        return ttScore; // Cache hit, Skip subtree search.
+    }
+
+    if (depth >= 6 && ttBestMove == Move() && !inCheck) {
+        negamax(board, depth - 4, alpha, beta, info, ply);
+        // Re-probe the TT using the shallow depth (depth - 4) to retrieve the move
+        int dummyScore = 0;
+        tt.probe(key, depth - 4, alpha, beta, dummyScore, ttBestMove);
+    }
+
+    if (depth <= 0) {
+        return quiescence(board, alpha, beta, info);
+    }
+
     if (depth >= 3 && !inCheck) {
         Bitboard nonPawnPieces = board.getPieces(side) & ~(board.getPieces(side == Color::White ? Piece::WhitePawn : Piece::BlackPawn) | board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing));
-        
+
         if (nonPawnPieces != 0) {
             Undo nullUndo;
             board.makeNullMove(nullUndo);
 
-            int R = 2;
+            int R = 3 + depth / 4;
             int score = -negamax(board, depth - 1 - R, -beta, -beta + 1, info, ply + 1);
 
             board.unmakeNullMove(nullUndo);
@@ -202,12 +219,19 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
             // Principal Variation Search: Full window search for 1st move
             score = -negamax(board, depth - 1, -beta, -alpha, info, ply + 1);
         } else {
-            // Late Move Reduction: reduce depth for quiet, non-checking late moves
+            // Late Move Reduction: logarithmic reduction based on depth and move index
             int reduction = 0;
             if (legalMovesCount >= 4 && depth >= 3 && !isCapture && !inCheck && !givesCheck
                 && move.promotion == Piece::None) {
-                reduction = 1;
-                if (legalMovesCount >= 8) reduction = depth / 3;
+
+                // Standard logarithmic LMR approximation formula
+                double depthLog = std::log(static_cast<double>(depth));
+                double moveCountLog = std::log(static_cast<double>(legalMovesCount));
+                reduction = static_cast<int>(0.5 + depthLog * moveCountLog / 2.0);
+
+                // Clamp reduction bounds for safety
+                if (reduction < 1) reduction = 1;
+                if (reduction > depth - 2) reduction = depth - 2;
             }
 
             // Zero-window search with reduction
@@ -279,44 +303,84 @@ Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
     MoveList moves = MoveGen::generateLegalMoves(board);
     if (moves.count == 0) return Move(); // Return empty move if no legal moves exist
 
-    // Absolute safety fallback: always default to the first legal move generated
-    bestMoveFound = moves.moves[0]; 
+    bestMoveFound = moves.moves[0];
+    int bestScoreThisDepth = 0;
 
     for (int currentDepth = 1; currentDepth <= limits.maxDepth; currentDepth++) {
-        Move bestMoveThisDepth = moves.moves[0]; // Default to first legal move
-        int bestScoreThisDepth = -INFINITY_SCORE;
+        Move bestMoveThisDepth = moves.moves[0];
         int alpha = -INFINITY_SCORE;
         int beta = INFINITY_SCORE;
 
-        orderMoves(board, moves, bestMoveFound, 0);
+        // Aspiration Windows: Use a tight window around the previous depth's score for depth >= 5
+        if (currentDepth >= 5) {
+            int window = 50; // 50 centipawns window
+            alpha = std::max(-INFINITY_SCORE, bestScoreThisDepth - window);
+            beta = std::min(INFINITY_SCORE, bestScoreThisDepth + window);
+        }
 
-        for (int i = 0; i < moves.count; i++) {
-            Move move = moves.moves[i];
-            Undo undo;
+        int failedWindowRetries = 0;
+        while (true) {
+            orderMoves(board, moves, bestMoveFound, 0);
 
-            if (!board.makeMove(move, undo)) continue;
+            int localBestScore = -INFINITY_SCORE;
+            Move localBestMove = bestMoveThisDepth;
 
-            int score = 0;
-            if (i == 0) {
-                score = -negamax(board, currentDepth - 1, -beta, -alpha, info, 1);
-            } else {
-                score = -negamax(board, currentDepth - 1, -alpha - 1, -alpha, info, 1);
-                if (score > alpha && score < beta) {
+            for (int i = 0; i < moves.count; i++) {
+                Move move = moves.moves[i];
+                Undo undo;
+
+                if (!board.makeMove(move, undo)) continue;
+
+                int score = 0;
+                if (i == 0) {
                     score = -negamax(board, currentDepth - 1, -beta, -alpha, info, 1);
+                } else {
+                    score = -negamax(board, currentDepth - 1, -alpha - 1, -alpha, info, 1);
+                    if (score > alpha && score < beta) {
+                        score = -negamax(board, currentDepth - 1, -beta, -alpha, info, 1);
+                    }
                 }
+
+                board.unmakeMove(move, undo);
+
+                if (info.stopped) break; // Discard partial iteration on timeout
+
+                if (i == 0 || score > localBestScore) {
+                    localBestScore = score;
+                    localBestMove = move;
+                }
+                if (score > alpha) {
+                    alpha = score;
+                }
+
+                // Break early if we hit beta (fail-high) during aspiration window search
+                if (alpha >= beta) break;
             }
 
-            board.unmakeMove(move, undo);
+            if (info.stopped) break;
 
-            if (info.stopped) break; // Discard partial iteration on timeout
+            // Handle aspiration window fail low / fail high
+            if (currentDepth >= 5 && (localBestScore <= alpha || localBestScore >= beta)) {
+                failedWindowRetries++;
+                if (localBestScore <= alpha) {
+                    // Fail low: widen alpha down to negative infinity, keep beta
+                    alpha = -INFINITY_SCORE;
+                } else {
+                    // Fail high: widen beta up to positive infinity, keep alpha
+                    beta = INFINITY_SCORE;
+                }
 
-            if (i == 0 || score > bestScoreThisDepth) {
-                bestScoreThisDepth = score;
-                bestMoveThisDepth = move;
+                // If we retry too many times, fallback to full window search to avoid performance loss
+                if (failedWindowRetries > 2) {
+                    alpha = -INFINITY_SCORE;
+                    beta = INFINITY_SCORE;
+                }
+                continue; // Re-search current depth with widened window
             }
-            if (score > alpha) {
-                alpha = score;
-            }
+
+            bestScoreThisDepth = localBestScore;
+            bestMoveThisDepth = localBestMove;
+            break; // Window search successful, exit retry loop
         }
 
         // Commit best move only if the current depth finished completely
