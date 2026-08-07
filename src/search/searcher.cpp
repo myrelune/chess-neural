@@ -71,36 +71,47 @@ void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int 
 }
 
 int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
-    // Count the nodes searched in QS!
     info.nodes++;
 
-    // 1. Stand Pat (Evaluate the current position before any captures)
     int standPat = Evaluate::evaluate(board);
 
     if (standPat >= beta) {
-        return beta; // Fail hard-beta
+        return beta;
     }
     if (standPat > alpha) {
         alpha = standPat;
     }
 
-    // 2. Generate ONLY Captures and Promotions
     MoveList captures;
     MoveGen::generateCaptureMoves(board, captures);
 
-    // Optional: Sort captures here (e.g., MVV-LVA)
+    orderMoves(board, captures, Move(), 0);
 
-    // 3. Loop through captures
     for (int i = 0; i < captures.count; i++) {
         Move move = captures.moves[i];
         Undo undo;
 
-        // Make the move. If it's illegal (leaves King in check), skip it!
         if (!board.makeMove(move, undo)) {
             continue;
         }
 
-        // Recursively call QS (Make sure to pass 'info' here too!)
+        Color opponentColor = board.getSideToMove();
+        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
+        Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
+
+        bool isIllegal = false;
+        if (kingBitboard != 0) {
+            Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
+            if (board.isSquareAttacked(kingSquare, opponentColor)) {
+                isIllegal = true;
+            }
+        }
+
+        if (isIllegal) {
+            board.unmakeMove(move, undo);
+            continue;
+        }
+
         int score = -quiescence(board, -beta, -alpha, info);
 
         board.unmakeMove(move, undo);
