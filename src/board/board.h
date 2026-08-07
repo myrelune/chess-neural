@@ -14,6 +14,7 @@ struct Undo {
     uint8_t castlingRights;
     Square enPassantSquare;
     int halfmoveClock;
+    int fullmoveNumber;
     uint64_t zobristKey;  // saved before the move so unmakeMove can restore it instantly
 };
 
@@ -80,7 +81,9 @@ private:
     int fullmoveNumber;
     uint64_t zobristKey;
 
-    std::vector<uint64_t> posHistory;
+    static constexpr int MAX_GAME_MOVES = 2048;
+    uint64_t positionHistory[MAX_GAME_MOVES];
+    int historyPly = 0;
 
     uint64_t computeZobristKey() const; // only used during loadFEN / reset
 

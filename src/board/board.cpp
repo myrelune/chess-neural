@@ -257,6 +257,8 @@ void Board::loadFEN(const std::string& fen) {
 
     // Full recompute once after loading — all subsequent updates are incremental
     zobristKey = computeZobristKey();
+    historyPly = 0;
+    positionHistory[historyPly++] = zobristKey;
 }
 
 bool Board::makeMove(const Move& move, Undo& undo) {
@@ -266,7 +268,12 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     undo.halfmoveClock   = halfmoveClock;
     undo.capturedPiece   = Piece::None;
     undo.capturedSquare  = move.to;
+    undo.fullmoveNumber = fullmoveNumber;
     undo.zobristKey      = zobristKey; // single save — unmakeMove just restores this
+
+    if (sideToMove == Color::Black) {
+        fullmoveNumber++;
+    }
 
     Piece movingPiece = mailbox[static_cast<int>(move.from)];
     if (movingPiece == Piece::None) return false;
@@ -362,7 +369,7 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     zxorEP(enPassantSquare);
 
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
-    posHistory.push_back(zobristKey);
+    positionHistory[historyPly++] = zobristKey;
     return true;
 }
 
@@ -406,22 +413,20 @@ void Board::unmakeMove(const Move& move, const Undo& undo) {
     castlingRights  = undo.castlingRights;
     enPassantSquare = undo.enPassantSquare;
     halfmoveClock   = undo.halfmoveClock;
+    fullmoveNumber = undo.fullmoveNumber;
     zobristKey      = undo.zobristKey; // O(1) restore — no recompute needed
-    if (!posHistory.empty()) posHistory.pop_back();
+    historyPly--;
 }
 
 bool Board::isRepetition() const {
-    // Current position key = zobristKey.
-    // Check if it has appeared at least once before in history (twofold = draw)
     int count = 0;
-    for (int i = (int)posHistory.size() - 2; i >= 0; i -= 2) {
-        if (posHistory[i] == zobristKey) {
+    for (int i = historyPly - 3; i >= 0; i -= 2) {
+        if (positionHistory[i] == zobristKey) {
             count++;
             if (count >= 1) return true; // twofold repetition
         }
-        // Stop looking back past irreversible moves (pawn move / capture resets halfmove clock)
-        // we approximate this by limiting to halfmoveClock plies back
-        if ((int)posHistory.size() - i > halfmoveClock + 1) break;
+
+        if ((historyPly - 1) - i > halfmoveClock) break;
     }
     return false;
 }
