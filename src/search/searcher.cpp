@@ -51,77 +51,63 @@ int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
 }
 
 void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int ply) {
-    struct ScoredMove {
-        Move move;
-        int score;
-    };
+    int scores[256];
 
-    ScoredMove scoredMoves[256];
     for (int i = 0; i < moves.count; i++) {
-        scoredMoves[i] = { moves.moves[i], scoreMove(board, moves.moves[i], ttMove, ply) };
+        scores[i] = scoreMove(board, moves.moves[i], ttMove, ply);
     }
 
-    // Sort moves in descending order of score
-    std::sort(scoredMoves, scoredMoves + moves.count, [](const ScoredMove& a, const ScoredMove& b) {
-        return a.score > b.score;
-    });
-
-    for (int i = 0; i < moves.count; i++) {
-        moves.moves[i] = scoredMoves[i].move;
-    }
-}
-
-int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
-    info.nodes++;
-    if (info.checkLimits()) return 0;
-
-    int standPat = Evaluate::evaluate(board);
-    if (standPat >= beta) return beta;
-    if (alpha < standPat) alpha = standPat;
-
-    MoveList moves = MoveGen::generateMoves(board);
-    orderMoves(board, moves, Move(), 0);
-
-    for (int i = 0; i < moves.count; i++) {
-            Move move = moves.moves[i];
-
-            bool isCapture = (board.pieceAt(move.getToSquare()) != Piece::None) ||
-                             ((board.pieceAt(move.getFromSquare()) == Piece::WhitePawn || board.pieceAt(move.getFromSquare()) == Piece::BlackPawn) &&
-                              move.getToSquare() == board.getEnPassantSquare() && board.getEnPassantSquare() != Square::None);
-            if (!isCapture) continue;
-
-            // Delta Pruning: Skip captures that can't possibly raise alpha
-            Piece target = board.pieceAt(move.getToSquare());
-            if (target != Piece::None && move.promotion == Piece::None) {
-                int capturedValue = getPieceValue(target);
-                // 200 cp safety margin for pawn promotions / minor tactics
-                if (standPat + capturedValue + 200 < alpha) {
-                    continue;
-                }
-            }
-
-            Undo undo;
-            if (!board.makeMove(move, undo)) continue;
-
-        // Check if move was legal (did it leave our king in check?)
-        Color opponentColor = board.getSideToMove();
-        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
-        Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
-        if (kingBitboard != 0) {
-            Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
-            if (board.isSquareAttacked(kingSquare, opponentColor)) {
-                board.unmakeMove(move, undo);
-                continue; // Illegal move
+    for (int i = 0; i < moves.count - 1; i++) {
+        int bestIndex = i;
+        for (int j = i + 1; j < moves.count; j++) {
+            if (scores[j] > scores[bestIndex]) {
+                bestIndex = j;
             }
         }
 
-        int score = -quiescence(board, -beta, -alpha, info);
+        std::swap(moves.moves[i], moves.moves[bestIndex]);
+        std::swap(scores[i], scores[bestIndex]);
+    }
+}
+
+int quiescence(Board& board, int alpha, int beta) {
+    // 1. Stand Pat (Evaluate the current position before any captures)
+    int standPat = Evaluate::evaluate(board);
+
+    if (standPat >= beta) {
+        return beta; // Fail hard-beta
+    }
+    if (standPat > alpha) {
+        alpha = standPat;
+    }
+
+    // 2. Generate ONLY Captures and Promotions
+    MoveList captures;
+    MoveGen::generateCaptureMoves(board, captures);
+
+    // Optional: Sort captures here (e.g., MVV-LVA: Most Valuable Victim - Least Valuable Attacker)
+
+    // 3. Loop through captures
+    for (int i = 0; i < captures.count; i++) {
+        Move move = captures.moves[i];
+        Undo undo;
+
+        // Make the move. If it's illegal (leaves King in check), skip it!
+        if (!board.makeMove(move, undo)) {
+            continue;
+        }
+
+        // Recursively call QS
+        int score = -quiescence(board, -beta, -alpha);
+
         board.unmakeMove(move, undo);
 
-        if (info.stopped) return 0;
-
-        if (score >= beta) return beta;
-        if (score > alpha) alpha = score;
+        if (score >= beta) {
+            return beta;
+        }
+        if (score > alpha) {
+            alpha = score;
+        }
     }
 
     return alpha;

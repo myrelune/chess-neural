@@ -194,6 +194,105 @@ namespace MoveGen {
         }
     }
 
+    void generateCaptureMoves(const Board& board, MoveList& moveList) {
+        Color side = board.getSideToMove();
+        Bitboard enemyPieces = (side == Color::White) ? board.getBlackPieces() : board.getWhitePieces();
+        Bitboard occupied = board.getOccupied();
+
+        Piece knightPiece = (side == Color::White) ? Piece::WhiteKnight : Piece::BlackKnight;
+        Bitboard knights = board.getPieces(knightPiece);
+        while (knights) {
+            int fromIdx = BitboardOps::popLSB(knights);
+
+            Bitboard attacks = Attacks::knightAttacks[fromIdx] & enemyPieces;
+            while (attacks) {
+                int targetIdx = BitboardOps::popLSB(attacks);
+                moveList.add(static_cast<Square>(fromIdx), static_cast<Square>(targetIdx));
+            }
+        }
+
+        Piece kingPiece = (side == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
+        Bitboard kings = board.getPieces(kingPiece);
+        if (kings) {
+            int fromIdx = BitboardOps::popLSB(kings);
+            Bitboard attacks = Attacks::kingAttacks[fromIdx] & enemyPieces;
+            while (attacks) {
+                int targetIdx = BitboardOps::popLSB(attacks);
+                moveList.add(static_cast<Square>(fromIdx), static_cast<Square>(targetIdx));
+            }
+        }
+
+        Piece pawnPiece = (side == Color::White) ? Piece::WhitePawn : Piece::BlackPawn;
+        Bitboard pawns = board.getPieces(pawnPiece);
+        int promotionRank = (side == Color::White) ? 7 : 0;
+
+        while (pawns) {
+            int fromIdx = BitboardOps::popLSB(pawns);
+            Square fromSquare = static_cast<Square>(fromIdx);
+            int rank = fromIdx / 8;
+            int file = fromIdx % 8;
+            int targetRank = rank + (side == Color::White ? 1 : -1);
+
+            if (targetRank >= 0 && targetRank < 8) {
+
+                // Check Promotions
+                if (targetRank == promotionRank) {
+                    int pushIdx = targetRank * 8 + file;
+                    if (!BitboardOps::getBit(occupied, pushIdx)) {
+                        moveList.add(fromSquare, static_cast<Square>(pushIdx),
+                                        (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen);
+                    }
+                }
+
+                // Check Captures
+                int captureFiles[2] = { file - 1, file + 1 };
+                for (int cf : captureFiles) {
+                    if (cf >= 0 && cf < 8) {
+                        int targetIdx = targetRank * 8 + cf;
+                        Square targetSquare = static_cast<Square>(targetIdx);
+
+                        if (BitboardOps::getBit(enemyPieces, targetIdx) ||
+                            (board.getEnPassantSquare() != Square::None && targetSquare == board.getEnPassantSquare())) {
+
+                            if (targetRank == promotionRank) {
+                                moveList.add(fromSquare, targetSquare, (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen);
+                            } else {
+                                moveList.add(fromSquare, targetSquare);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Piece types[3] = {
+            (side == Color::White) ? Piece::WhiteBishop : Piece::BlackBishop,
+            (side == Color::White) ? Piece::WhiteRook : Piece::BlackRook,
+            (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen
+        };
+
+        for (Piece p : types) {
+            Bitboard pieces = board.getPieces(p);
+            bool isRook = (p == Piece::WhiteRook || p == Piece::BlackRook || p == Piece::WhiteQueen || p == Piece::BlackQueen);
+            bool isBishop = (p == Piece::WhiteBishop || p == Piece::BlackBishop || p == Piece::WhiteQueen || p == Piece::BlackQueen);
+
+            while (pieces) {
+                int fromIdx = BitboardOps::popLSB(pieces);
+                Bitboard attacks = 0ULL;
+
+                if (isRook)   attacks |= Attacks::rookAttacksBB(static_cast<Square>(fromIdx), occupied);
+                if (isBishop) attacks |= Attacks::bishopAttacksBB(static_cast<Square>(fromIdx), occupied);
+
+                attacks &= enemyPieces;
+
+                while (attacks) {
+                    int targetIdx = BitboardOps::popLSB(attacks);
+                    moveList.add(static_cast<Square>(fromIdx), static_cast<Square>(targetIdx));
+                }
+            }
+        }
+    }
+
     MoveList generateMoves(const Board& board) {
         MoveList moveList;
         Color side = board.getSideToMove();
