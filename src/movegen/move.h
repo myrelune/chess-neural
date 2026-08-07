@@ -5,9 +5,22 @@
 #include <string>
 
 struct Move {
-    Square from;
-    Square to;
-    Piece promotion;
+    Square from = Square::None;
+    Square to = Square::None;
+    Piece promotion = Piece::None;
+
+    // Getter helpers for Searcher
+    Square getFromSquare() const { return from; }
+    Square getToSquare() const { return to; }
+
+    // Equality check for move ordering and best move tracking
+    bool operator==(const Move& other) const {
+        return from == other.from && to == other.to && promotion == other.promotion;
+    }
+
+    bool operator!=(const Move& other) const {
+        return !(*this == other);
+    }
 };
 
 struct MoveList {
@@ -35,8 +48,8 @@ inline std::string moveToUci(const Move& move) {
 
     if (move.promotion != Piece::None) {
         switch (move.promotion) {
-            case Piece::WhiteQueen: case Piece::BlackQueen: s += 'q'; break;
-            case Piece::WhiteRook: case Piece::BlackRook: s += 'r'; break;
+            case Piece::WhiteQueen:  case Piece::BlackQueen:  s += 'q'; break;
+            case Piece::WhiteRook:   case Piece::BlackRook:   s += 'r'; break;
             case Piece::WhiteBishop: case Piece::BlackBishop: s += 'b'; break;
             case Piece::WhiteKnight: case Piece::BlackKnight: s += 'n'; break;
             default: break;
