@@ -1,59 +1,38 @@
 #include "movegen.h"
 #include "../board/bitboard.h"
+#include "../attacks/attacks.h"
 
 namespace MoveGen {
-    constexpr int knightOffsets[8][2] = {
-        {-2, -1}, {-2, 1}, {-1, -2}, {-1, 2},
-        { 1, -2}, { 1, 2}, { 2, -1}, { 2, 1}
-    };
 
-    constexpr int rookOffsets[4][2] = {
-        { 1,  0}, {-1,  0}, { 0,  1}, { 0, -1}
-    };
-
-    constexpr int bishopOffsets[4][2] = {
-        { 1,  1}, { 1, -1}, {-1,  1}, {-1, -1}
-    };
-
-    constexpr int kingOffsets[8][2] = {
-        { 1,  0}, {-1,  0}, { 0,  1}, { 0, -1},
-        { 1,  1}, { 1, -1}, {-1,  1}, {-1, -1}
-    };
-
-    void generateSliderMoves(const Board& board, MoveList& moveList, Color side, Piece pieceType, const int offsets[][2], int numDirs) {
+    // Fast Slider Generation via Magic Bitboards
+    void generateSliderMoves(const Board& board, MoveList& moveList, Color side, Piece pieceType) {
         Bitboard pieces = board.getPieces(pieceType);
         Bitboard friendlyPieces = (side == Color::White) ? board.getWhitePieces() : board.getBlackPieces();
         Bitboard occupied = board.getOccupied();
 
+        bool isRook = (pieceType == Piece::WhiteRook || pieceType == Piece::BlackRook);
+
         while (pieces) {
             int fromSquareIdx = BitboardOps::popLSB(pieces);
             Square fromSquare = static_cast<Square>(fromSquareIdx);
-            int startRank = fromSquareIdx / 8;
-            int startFile = fromSquareIdx % 8;
 
-            for (int d = 0; d < numDirs; d++) {
-                int r = startRank;
-                int f = startFile;
+            // Fetch all attacks instantly using magic bitboard tables
+            Bitboard attacks = isRook 
+                ? Attacks::rookAttacksBB(fromSquare, occupied) 
+                : Attacks::bishopAttacksBB(fromSquare, occupied);
 
-                while (true) {
-                    r += offsets[d][0];
-                    f += offsets[d][1];
+            // Remove friendly pieces from attack map (can't capture your own pieces)
+            attacks &= ~friendlyPieces;
 
-                    if (r < 0 || r > 7 || f < 0 || f > 7) break;
-
-                    int targetIdx = r * 8 + f;
-                    Square targetSquare = static_cast<Square>(targetIdx);
-
-                    if (BitboardOps::getBit(friendlyPieces, targetIdx)) break;
-
-                    moveList.add(fromSquare, targetSquare);
-
-                    if (BitboardOps::getBit(occupied, targetIdx)) break;
-                }
+            while (attacks) {
+                int targetIdx = BitboardOps::popLSB(attacks);
+                Square targetSquare = static_cast<Square>(targetIdx);
+                moveList.add(fromSquare, targetSquare);
             }
         }
     }
 
+    // Fast Knight Generation via Attack Tables
     void generateKnightMoves(const Board& board, MoveList& moveList, Color side) {
         Piece knightPiece = (side == Color::White) ? Piece::WhiteKnight : Piece::BlackKnight;
         Bitboard knights = board.getPieces(knightPiece);
@@ -63,21 +42,36 @@ namespace MoveGen {
             int fromSquareIdx = BitboardOps::popLSB(knights);
             Square fromSquare = static_cast<Square>(fromSquareIdx);
 
-            int rank = fromSquareIdx / 8;
-            int file = fromSquareIdx % 8;
+            // Instant lookup using precomputed leaper table
+            Bitboard attacks = Attacks::knightAttacks[fromSquareIdx] & ~friendlyPieces;
 
-            for (int i = 0; i < 8; i++) {
-                int targetRank = rank + knightOffsets[i][0];
-                int targetFile = file + knightOffsets[i][1];
-
-                if (targetRank >= 0 && targetRank < 8 && targetFile >= 0 && targetFile < 8) {
-                    int targetIdx = targetRank * 8 + targetFile;
-                    if (!BitboardOps::getBit(friendlyPieces, targetIdx)) {
-                        moveList.add(fromSquare, static_cast<Square>(targetIdx));
-                    }
-                }
+            while (attacks) {
+                int targetIdx = BitboardOps::popLSB(attacks);
+                moveList.add(fromSquare, static_cast<Square>(targetIdx));
             }
         }
+    }
+
+    // Fast King Generation via Attack Tables
+    void generateKingMoves(const Board& board, MoveList& moveList, Color side) {
+        Piece kingPiece = (side == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
+        Bitboard kings = board.getPieces(kingPiece);
+        Bitboard friendlyPieces = (side == Color::White) ? board.getWhitePieces() : board.getBlackPieces();
+
+        while (kings) {
+            int fromSquareIdx = BitboardOps::popLSB(kings);
+            Square fromSquare = static_cast<Square>(fromSquareIdx);
+
+            // Instant lookup using precomputed king table
+            Bitboard attacks = Attacks::kingAttacks[fromSquareIdx] & ~friendlyPieces;
+
+            while (attacks) {
+                int targetIdx = BitboardOps::popLSB(attacks);
+                moveList.add(fromSquare, static_cast<Square>(targetIdx));
+            }
+        }
+
+        generateCastlingMoves(board, moveList, side);
     }
 
     void generateCastlingMoves(const Board& board, MoveList& moveList, Color side) {
@@ -122,34 +116,6 @@ namespace MoveGen {
                 }
             }
         }
-    }
-
-    void generateKingMoves(const Board& board, MoveList& moveList, Color side) {
-        Piece kingPiece = (side == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
-        Bitboard kings = board.getPieces(kingPiece);
-        Bitboard friendlyPieces = (side == Color::White) ? board.getWhitePieces() : board.getBlackPieces();
-
-        while (kings) {
-            int fromSquareIdx = BitboardOps::popLSB(kings);
-
-            Square fromSquare = static_cast<Square>(fromSquareIdx);
-            int rank = fromSquareIdx / 8;
-            int file = fromSquareIdx % 8;
-
-            for (int i = 0; i < 8; i++) {
-                int targetRank = rank + kingOffsets[i][0];
-                int targetFile = file + kingOffsets[i][1];
-
-                if (targetRank >= 0 && targetRank < 8 && targetFile >= 0 && targetFile < 8) {
-                    int targetIdx = targetRank * 8 + targetFile;
-                    if (!BitboardOps::getBit(friendlyPieces, targetIdx)) {
-                        moveList.add(fromSquare, static_cast<Square>(targetIdx));
-                    }
-                }
-            }
-        }
-
-        generateCastlingMoves(board, moveList, side);
     }
 
     void generatePawnMoves(const Board& board, MoveList& moveList, Color side) {
@@ -233,14 +199,13 @@ namespace MoveGen {
         generatePawnMoves(board, moveList, side);
 
         Piece rook = (side == Color::White) ? Piece::WhiteRook : Piece::BlackRook;
-        generateSliderMoves(board, moveList, side, rook, rookOffsets, 4);
+        generateSliderMoves(board, moveList, side, rook);
 
         Piece bishop = (side == Color::White) ? Piece::WhiteBishop : Piece::BlackBishop;
-        generateSliderMoves(board, moveList, side, bishop, bishopOffsets, 4);
+        generateSliderMoves(board, moveList, side, bishop);
 
         Piece queen = (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen;
-        generateSliderMoves(board, moveList, side, queen, rookOffsets, 4);
-        generateSliderMoves(board, moveList, side, queen, bishopOffsets, 4);
+        generateSliderMoves(board, moveList, side, queen); // Queens use both rook and bishop tables
 
         return moveList;
     }

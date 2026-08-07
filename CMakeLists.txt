@@ -13,4 +13,5 @@ add_executable(
     src/uci/uci.cpp
     src/eval/evaluate.cpp
     src/eval/tables.cpp
+    src/attacks/attacks.cpp
 )
