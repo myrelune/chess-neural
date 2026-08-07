@@ -44,7 +44,7 @@ void Board::clear() {
     halfmoveClock = 0;
     fullmoveNumber = 1;
     zobristKey = 0;
-    posHistory.clear();
+    historyPly = 0;
 }
 
 void Board::reset() {
