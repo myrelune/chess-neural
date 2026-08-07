@@ -2,7 +2,6 @@
 #include "bitboard.h"
 #include "../zobrist/zobrist.h"
 #include "../attacks/attacks.h"
-#include <vector>
 
 #include <iostream>
 #include <sstream>
