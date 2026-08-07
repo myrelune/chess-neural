@@ -70,7 +70,10 @@ void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int 
     }
 }
 
-int quiescence(Board& board, int alpha, int beta) {
+int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
+    // Count the nodes searched in QS!
+    info.nodes++;
+
     // 1. Stand Pat (Evaluate the current position before any captures)
     int standPat = Evaluate::evaluate(board);
 
@@ -85,7 +88,7 @@ int quiescence(Board& board, int alpha, int beta) {
     MoveList captures;
     MoveGen::generateCaptureMoves(board, captures);
 
-    // Optional: Sort captures here (e.g., MVV-LVA: Most Valuable Victim - Least Valuable Attacker)
+    // Optional: Sort captures here (e.g., MVV-LVA)
 
     // 3. Loop through captures
     for (int i = 0; i < captures.count; i++) {
@@ -97,8 +100,8 @@ int quiescence(Board& board, int alpha, int beta) {
             continue;
         }
 
-        // Recursively call QS
-        int score = -quiescence(board, -beta, -alpha);
+        // Recursively call QS (Make sure to pass 'info' here too!)
+        int score = -quiescence(board, -beta, -alpha, info);
 
         board.unmakeMove(move, undo);
 
