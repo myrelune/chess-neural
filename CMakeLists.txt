@@ -11,4 +11,6 @@ add_executable(
     src/board/board.cpp
     src/movegen/movegen.cpp
     src/uci/uci.cpp
+    src/eval/evaluate.cpp
+    src/eval/tables.cpp
 )

@@ -95,10 +95,12 @@ void Board::setPiece(Square square, Piece piece) {
 Piece Board::pieceAt(Square square) const {
     int sq = static_cast<int>(square);
 
+    if (sq < 0 || sq >= 64)
+        return Piece::None;
+
     for (int i = 0; i < 12; i++) {
-        if (BitboardOps::getBit(pieces[i], sq)) {
+        if (BitboardOps::getBit(pieces[i], sq))
             return static_cast<Piece>(i + 1);
-        }
     }
 
     return Piece::None;
