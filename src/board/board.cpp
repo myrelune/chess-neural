@@ -367,6 +367,12 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     zxorCastling(castlingRights);
     zxorEP(enPassantSquare);
 
+    if (movingPiece == Piece::WhitePawn || movingPiece == Piece::BlackPawn || targetPiece != Piece::None) {
+        halfmoveClock = 0;
+    } else {
+        halfmoveClock++;
+    }
+
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
     positionHistory[historyPly++] = zobristKey;
     return true;

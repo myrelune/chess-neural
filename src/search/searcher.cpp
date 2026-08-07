@@ -47,7 +47,9 @@ int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
     }
 
     Color side = board.getSideToMove();
-    return historyTable[static_cast<int>(side)][static_cast<int>(move.getFromSquare())][static_cast<int>(move.getToSquare())];
+    int histScore = historyTable[static_cast<int>(side)][static_cast<int>(move.getFromSquare())][static_cast<int>(move.getToSquare())];
+    
+    return std::min(histScore, 10000);
 }
 
 void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int ply) {
@@ -74,54 +76,37 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     info.nodes++;
 
     int standPat = Evaluate::evaluate(board);
-
-    if (standPat >= beta) {
-        return beta;
-    }
-    if (standPat > alpha) {
-        alpha = standPat;
-    }
+    if (standPat >= beta) return beta;
+    if (standPat > alpha) alpha = standPat;
 
     MoveList captures;
     MoveGen::generateCaptureMoves(board, captures);
 
-    orderMoves(board, captures, Move(), 0);
+    orderMoves(board, captures, Move(), 64);
 
     for (int i = 0; i < captures.count; i++) {
         Move move = captures.moves[i];
         Undo undo;
 
-        if (!board.makeMove(move, undo)) {
-            continue;
-        }
+        if (!board.makeMove(move, undo)) continue;
 
+        // Verify move legality (King cannot be left in check)
         Color opponentColor = board.getSideToMove();
         Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
-        Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
-
-        bool isIllegal = false;
-        if (kingBitboard != 0) {
-            Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
-            if (board.isSquareAttacked(kingSquare, opponentColor)) {
-                isIllegal = true;
+        Bitboard kingBb = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
+        if (kingBb != 0) {
+            Square kingSq = static_cast<Square>(BitboardOps::getLSB(kingBb));
+            if (board.isSquareAttacked(kingSq, opponentColor)) {
+                board.unmakeMove(move, undo);
+                continue; // Skip illegal capture
             }
         }
 
-        if (isIllegal) {
-            board.unmakeMove(move, undo);
-            continue;
-        }
-
         int score = -quiescence(board, -beta, -alpha, info);
-
         board.unmakeMove(move, undo);
 
-        if (score >= beta) {
-            return beta;
-        }
-        if (score > alpha) {
-            alpha = score;
-        }
+        if (score >= beta) return beta;
+        if (score > alpha) alpha = score;
     }
 
     return alpha;
