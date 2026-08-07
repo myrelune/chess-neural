@@ -1,58 +1,40 @@
 #include "evaluate.h"
 #include "tables.h"
-#include "../movegen/movegen.h"
 
-int Evaluate::evaluatePieceSquareTables(const Board& board) {
+int Evaluate::evaluatePieceSquareTables(const Board& board, int& gamePhase) {
     int mgScore = 0;
     int egScore = 0;
-    int gamePhase = 0;
+    gamePhase = 0;
 
-    for (int sq = 0; sq < 64; sq++) {
-        Piece piece = board.pieceAt(static_cast<Square>(sq));
-
-        if (piece == Piece::None)
-            continue;
-
-        int p = static_cast<int>(piece);
-
+    // Iterate through all 12 piece types using bitboards
+    for (int p = static_cast<int>(Piece::WhitePawn); p <= static_cast<int>(Piece::BlackKing); p++) {
+        Piece piece = static_cast<Piece>(p);
+        Bitboard pieces = board.getPieces(piece);
         int sign = (pieceColor(piece) == Color::White) ? 1 : -1;
 
-        mgScore += sign * Tables::mgTable[p][sq];
-        egScore += sign * Tables::egTable[p][sq];
-
-        gamePhase += Tables::gamePhaseInc[p];
+        while (pieces) {
+            int sq = BitboardOps::popLSB(pieces);
+            mgScore += sign * Tables::mgTable[p][sq];
+            egScore += sign * Tables::egTable[p][sq];
+            gamePhase += Tables::gamePhaseInc[p];
+        }
     }
 
-    // Maximum phase is 24
-    if (gamePhase > 24)
-        gamePhase = 24;
+    if (gamePhase > 24) gamePhase = 24;
 
     int mgPhase = gamePhase;
     int egPhase = 24 - gamePhase;
 
-    int score = (mgScore * mgPhase + egScore * egPhase) / 24;
-
-    return score;
+    return (mgScore * mgPhase + egScore * egPhase) / 24;
 }
 
 int Evaluate::evaluateBishopPair(const Board& board) {
     int score = 0;
+    int whiteBishops = BitboardOps::countBits(board.getPieces(Piece::WhiteBishop));
+    int blackBishops = BitboardOps::countBits(board.getPieces(Piece::BlackBishop));
 
-    int whiteBishops =
-        BitboardOps::countBits(
-            board.getPieces(Piece::WhiteBishop)
-        );
-
-    int blackBishops =
-        BitboardOps::countBits(
-            board.getPieces(Piece::BlackBishop)
-        );
-
-    if (whiteBishops >= 2)
-        score += 30;
-
-    if (blackBishops >= 2)
-        score -= 30;
+    if (whiteBishops >= 2) score += 30;
+    if (blackBishops >= 2) score -= 30;
 
     return score;
 }
@@ -60,67 +42,34 @@ int Evaluate::evaluateBishopPair(const Board& board) {
 int Evaluate::evaluateRooks(const Board& board) {
     int score = 0;
 
-    for(int file = 0; file < 8; file++) {
-        bool whitePawn = false;
-        bool blackPawn = false;
-        bool whiteRook = false;
-        bool blackRook = false;
+    Bitboard whitePawns = board.getPieces(Piece::WhitePawn);
+    Bitboard blackPawns = board.getPieces(Piece::BlackPawn);
+    Bitboard whiteRooks = board.getPieces(Piece::WhiteRook);
+    Bitboard blackRooks = board.getPieces(Piece::BlackRook);
 
-        for(int rank = 0; rank < 8; rank++) {
-            Piece p =
-                board.pieceAt(
-                    static_cast<Square>(rank * 8 + file)
-                );
+    // 7th Rank Bonuses (White on rank 6, Black on rank 1 - 0-indexed)
+    Bitboard whiteRank7Rooks = whiteRooks & 0x00FF000000000000ULL;
+    Bitboard blackRank2Rooks = blackRooks & 0x000000000000FF00ULL;
+    score += BitboardOps::countBits(whiteRank7Rooks) * 40;
+    score -= BitboardOps::countBits(blackRank2Rooks) * 40;
 
-            if(p == Piece::WhitePawn)
-                whitePawn = true;
+    // Open and Semi-Open File Evaluations
+    for (int file = 0; file < 8; file++) {
+        Bitboard fileMask = 0x0101010101010101ULL << file;
 
-            if(p == Piece::BlackPawn)
-                blackPawn = true;
+        bool wPawn = (whitePawns & fileMask) != 0;
+        bool bPawn = (blackPawns & fileMask) != 0;
+        bool wRook = (whiteRooks & fileMask) != 0;
+        bool bRook = (blackRooks & fileMask) != 0;
 
-            if(p == Piece::WhiteRook)
-                whiteRook = true;
-
-            if(p == Piece::BlackRook)
-                blackRook = true;
-        }
-
-        // Open file
-        if(!whitePawn && !blackPawn) {
-            if(whiteRook)
-                score += 25;
-
-            if(blackRook)
-                score -= 25;
-        }
-
-        // Semi-open file
-        else if(!whitePawn && blackRook) {
+        if (!wPawn && !bPawn) {
+            if (wRook) score += 25;
+            if (bRook) score -= 25;
+        } else if (!wPawn && bRook) {
             score -= 15;
-        }
-
-        else if(!blackPawn && whiteRook) {
+        } else if (!bPawn && wRook) {
             score += 15;
         }
-    }
-
-    // Bonus for rooks on the 7th rank
-    for(int file = 0; file < 8; file++) {
-        Piece whiteRank7 =
-            board.pieceAt(
-                static_cast<Square>(6 * 8 + file)
-            );
-
-        Piece blackRank2 =
-            board.pieceAt(
-                static_cast<Square>(1 * 8 + file)
-            );
-
-        if(whiteRank7 == Piece::WhiteRook)
-            score += 40;
-
-        if(blackRank2 == Piece::BlackRook)
-            score -= 40;
     }
 
     return score;
@@ -128,82 +77,27 @@ int Evaluate::evaluateRooks(const Board& board) {
 
 int Evaluate::evaluatePawnStructure(const Board& board) {
     int score = 0;
+    Bitboard whitePawns = board.getPieces(Piece::WhitePawn);
+    Bitboard blackPawns = board.getPieces(Piece::BlackPawn);
 
-    for(int file = 0; file < 8; file++) {
-        int whitePawns = 0;
-        int blackPawns = 0;
+    for (int file = 0; file < 8; file++) {
+        Bitboard fileMask = 0x0101010101010101ULL << file;
+        
+        int wCount = BitboardOps::countBits(whitePawns & fileMask);
+        int bCount = BitboardOps::countBits(blackPawns & fileMask);
 
-        for(int rank = 0; rank < 8; rank++) {
-            Square sq = static_cast<Square>(rank * 8 + file);
-            Piece piece = board.pieceAt(sq);
+        // Doubled Pawns
+        if (wCount > 1) score -= (wCount - 1) * 15;
+        if (bCount > 1) score += (bCount - 1) * 15;
 
-            if(piece == Piece::WhitePawn)
-                whitePawns++;
+        // Isolated Pawns
+        Bitboard adjacentFiles = 0ULL;
+        if (file > 0) adjacentFiles |= 0x0101010101010101ULL << (file - 1);
+        if (file < 7) adjacentFiles |= 0x0101010101010101ULL << (file + 1);
 
-            if(piece == Piece::BlackPawn)
-                blackPawns++;
-        }
-
-        if(whitePawns > 1)
-            score -= (whitePawns - 1) * 15;
-
-        if(blackPawns > 1)
-            score += (blackPawns - 1) * 15;
-
-        bool whiteNeighbor = false;
-        bool blackNeighbor = false;
-
-        if(file > 0) {
-            for(int rank=0; rank<8; rank++) {
-                Piece p = board.pieceAt(
-                    static_cast<Square>(rank*8 + file-1)
-                );
-
-                if(p == Piece::WhitePawn)
-                    whiteNeighbor = true;
-
-                if(p == Piece::BlackPawn)
-                    blackNeighbor = true;
-            }
-        }
-
-        if(file < 7) {
-            for(int rank=0; rank<8; rank++) {
-                Piece p = board.pieceAt(
-                    static_cast<Square>(rank*8 + file+1)
-                );
-
-                if(p == Piece::WhitePawn)
-                    whiteNeighbor = true;
-
-                if(p == Piece::BlackPawn)
-                    blackNeighbor = true;
-            }
-        }
-
-        if(whitePawns && !whiteNeighbor)
-            score -= 10;
-
-        if(blackPawns && !blackNeighbor)
-            score += 10;
+        if (wCount > 0 && !(whitePawns & adjacentFiles)) score -= 10;
+        if (bCount > 0 && !(blackPawns & adjacentFiles)) score += 10;
     }
-
-    return score;
-}
-
-int Evaluate::evaluateMobility(const Board& board) {
-    int score = 0;
-
-    Board copy = board;
-
-    MoveList moves = MoveGen::generateLegalMoves(copy);
-
-    int mobility = moves.count;
-
-    if(board.getSideToMove() == Color::White)
-        score += mobility * 2;
-    else
-        score -= mobility * 2;
 
     return score;
 }
@@ -214,49 +108,30 @@ int Evaluate::evaluateKingSafety(const Board& board) {
     Bitboard whiteKing = board.getPieces(Piece::WhiteKing);
     Bitboard blackKing = board.getPieces(Piece::BlackKing);
 
+    if (!whiteKing || !blackKing) return 0;
+
     Square wk = static_cast<Square>(BitboardOps::getLSB(whiteKing));
     Square bk = static_cast<Square>(BitboardOps::getLSB(blackKing));
 
-
     auto pawnShield = [&](Square king, Color color) {
         int penalty = 0;
-
         int sq = static_cast<int>(king);
-
         int rank = sq / 8;
         int file = sq % 8;
 
-
-        for(int df=-1; df<=1; df++) {
+        for (int df = -1; df <= 1; df++) {
             int f = file + df;
+            if (f < 0 || f > 7) continue;
 
-            if(f < 0 || f > 7)
-                continue;
+            int pawnRank = (color == Color::White) ? rank + 1 : rank - 1;
+            if (pawnRank < 0 || pawnRank > 7) continue;
 
-            int pawnRank =
-                (color == Color::White)
-                ? rank + 1
-                : rank - 1;
-
-            if(pawnRank < 0 || pawnRank > 7)
-                continue;
-
-            Piece pawn =
-                board.pieceAt(
-                    static_cast<Square>(pawnRank*8+f)
-                );
-
-            if(
-                (color == Color::White &&
-                 pawn != Piece::WhitePawn)
-                ||
-                (color == Color::Black &&
-                 pawn != Piece::BlackPawn)
-              ) {
+            Piece pawn = board.pieceAt(static_cast<Square>(pawnRank * 8 + f));
+            if ((color == Color::White && pawn != Piece::WhitePawn) ||
+                (color == Color::Black && pawn != Piece::BlackPawn)) {
                 penalty += 15;
             }
         }
-
         return penalty;
     };
 
@@ -267,34 +142,15 @@ int Evaluate::evaluateKingSafety(const Board& board) {
 }
 
 int Evaluate::evaluate(const Board& board) {
-    Board copy = board;
-
-    MoveList moves = MoveGen::generateLegalMoves(copy);
-
-    if (moves.count == 0) {
-        Square king = static_cast<Square>(
-            BitboardOps::getLSB(board.getPieces(board.getSideToMove() == Color::White ? Piece::WhiteKing : Piece::BlackKing))
-        );
-
-        Color enemy = board.getSideToMove() == Color::White ? Color::Black : Color::White;
-
-        if (board.isSquareAttacked(king, enemy)) {
-            return -1000000;
-        }
-
-        return 0;
-    }
-
     int score = 0;
+    int gamePhase = 0;
 
-    score += evaluatePieceSquareTables(board);
+    score += evaluatePieceSquareTables(board, gamePhase);
     score += evaluatePawnStructure(board);
     score += evaluateBishopPair(board);
     score += evaluateRooks(board);
-    score += evaluateMobility(board);
     score += evaluateKingSafety(board);
 
-    return (board.getSideToMove() == Color::White)
-        ? score
-        : -score;
+    // Return score relative to side to move for Negamax
+    return (board.getSideToMove() == Color::White) ? score : -score;
 }

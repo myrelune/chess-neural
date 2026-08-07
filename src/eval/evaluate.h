@@ -23,7 +23,7 @@ namespace Evaluate
     int evaluate(const Board& board);
 
     int evaluateMaterial(const Board& board);
-    int evaluatePieceSquareTables(const Board& board);
+    int evaluatePieceSquareTables(const Board& board, int& gamePhase);
     int evaluatePawnStructure(const Board& board);
     int evaluateMobility(const Board& board);
     int evaluateKingSafety(const Board& board);
