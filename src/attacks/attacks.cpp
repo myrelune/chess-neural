@@ -5,8 +5,6 @@
 #include <algorithm>
 
 namespace Attacks {
-
-    // Define the global storage arrays declared in the header
     Bitboard knightAttacks[64];
     Bitboard kingAttacks[64];
     Bitboard queenAttacks[64];
@@ -43,7 +41,12 @@ namespace Attacks {
                 int r = rank + m[0];
                 int f = file + m[1];
                 if (isValidSquare(r, f)) {
-                    knightAttacks[sq] |= (1ULL << (r * 8 + f));
+                    // Prevent horizontal wrapping across board edges
+                    int fileDist = std::abs(f - file);
+                    int rankDist = std::abs(r - rank);
+                    if ((fileDist == 1 && rankDist == 2) || (fileDist == 2 && rankDist == 1)) {
+                        knightAttacks[sq] |= (1ULL << (r * 8 + f));
+                    }
                 }
             }
 
@@ -57,7 +60,12 @@ namespace Attacks {
                 int r = rank + m[0];
                 int f = file + m[1];
                 if (isValidSquare(r, f)) {
-                    kingAttacks[sq] |= (1ULL << (r * 8 + f));
+                    // Prevent horizontal/vertical wrapping for single-step king moves
+                    int fileDist = std::abs(f - file);
+                    int rankDist = std::abs(r - rank);
+                    if (fileDist <= 1 && rankDist <= 1) {
+                        kingAttacks[sq] |= (1ULL << (r * 8 + f));
+                    }
                 }
             }
 
@@ -147,7 +155,7 @@ namespace Attacks {
 
         for (int i = 0; i < n; ++i) {
             Bitboard occupied = 0ULL;
-            int tempMask = mask;
+            Bitboard tempMask = mask; // FIX: Fixed integer truncation bug
             for (int b = 0; b < bitCount; ++b) {
                 int lsbIndex = __builtin_ctzll(tempMask);
                 tempMask &= tempMask - 1;
@@ -202,13 +210,16 @@ namespace Attacks {
     // Attack Validation Routine 
     bool isSquareAttacked(const Board& board, Square square, Color attackerColor) {
         Bitboard occ = board.getOccupied(); 
+        int sqIdx = static_cast<int>(square);
 
         if (attackerColor == Color::White) {
-            if (pawnAttacksBB(square, Color::Black) & board.getPieces(Piece::WhitePawn)) return true;
-        } 
+            if (blackPawnAttacks[sqIdx] & board.getPieces(Piece::WhitePawn)) return true;
+        } else {
+            if (whitePawnAttacks[sqIdx] & board.getPieces(Piece::BlackPawn)) return true;
+        }
 
-        if (knightAttacksBB(square) & board.getPieces(attackerColor == Color::White ? Piece::WhiteKnight : Piece::BlackKnight)) return true;
-        if (kingAttacksBB(square) & board.getPieces(attackerColor == Color::White ? Piece::WhiteKing : Piece::BlackKing)) return true;
+        if (knightAttacks[sqIdx] & board.getPieces(attackerColor == Color::White ? Piece::WhiteKnight : Piece::BlackKnight)) return true;
+        if (kingAttacks[sqIdx] & board.getPieces(attackerColor == Color::White ? Piece::WhiteKing : Piece::BlackKing)) return true;
         
         Bitboard bishops = board.getPieces(attackerColor == Color::White ? Piece::WhiteBishop : Piece::BlackBishop);
         Bitboard rooks   = board.getPieces(attackerColor == Color::White ? Piece::WhiteRook : Piece::BlackRook);
@@ -239,7 +250,7 @@ namespace Attacks {
             int indices = 1 << bitCount;
             for (int i = 0; i < indices; ++i) {
                 Bitboard occupied = 0ULL;
-                int tempMask = mask;
+                Bitboard tempMask = mask; // FIX: Fixed integer truncation bug
                 for (int b = 0; b < bitCount; ++b) {
                     int lsbIndex = __builtin_ctzll(tempMask);
                     tempMask &= tempMask - 1;
@@ -257,7 +268,7 @@ namespace Attacks {
 
     void initAttacks() {
         initLeapers();
-        initSlidingPieces(true);  // Automatically generates rook magics and populates tables
-        initSlidingPieces(false); // Automatically generates bishop magics and populates tables
+        initSlidingPieces(true);
+        initSlidingPieces(false);
     }
 }

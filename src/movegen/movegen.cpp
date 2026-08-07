@@ -10,18 +10,19 @@ namespace MoveGen {
         Bitboard friendlyPieces = (side == Color::White) ? board.getWhitePieces() : board.getBlackPieces();
         Bitboard occupied = board.getOccupied();
 
-        bool isRook = (pieceType == Piece::WhiteRook || pieceType == Piece::BlackRook);
+        bool generatesRook = (pieceType == Piece::WhiteRook || pieceType == Piece::BlackRook ||
+                              pieceType == Piece::WhiteQueen || pieceType == Piece::BlackQueen);
+        bool generatesBishop = (pieceType == Piece::WhiteBishop || pieceType == Piece::BlackBishop ||
+                                pieceType == Piece::WhiteQueen || pieceType == Piece::BlackQueen);
 
         while (pieces) {
             int fromSquareIdx = BitboardOps::popLSB(pieces);
             Square fromSquare = static_cast<Square>(fromSquareIdx);
 
-            // Fetch all attacks instantly using magic bitboard tables
-            Bitboard attacks = isRook 
-                ? Attacks::rookAttacksBB(fromSquare, occupied) 
-                : Attacks::bishopAttacksBB(fromSquare, occupied);
+            Bitboard attacks = 0ULL;
+            if (generatesRook)   attacks |= Attacks::rookAttacksBB(fromSquare, occupied);
+            if (generatesBishop) attacks |= Attacks::bishopAttacksBB(fromSquare, occupied);
 
-            // Remove friendly pieces from attack map (can't capture your own pieces)
             attacks &= ~friendlyPieces;
 
             while (attacks) {
@@ -42,12 +43,59 @@ namespace MoveGen {
             int fromSquareIdx = BitboardOps::popLSB(knights);
             Square fromSquare = static_cast<Square>(fromSquareIdx);
 
-            // Instant lookup using precomputed leaper table
             Bitboard attacks = Attacks::knightAttacks[fromSquareIdx] & ~friendlyPieces;
 
             while (attacks) {
                 int targetIdx = BitboardOps::popLSB(attacks);
                 moveList.add(fromSquare, static_cast<Square>(targetIdx));
+            }
+        }
+    }
+
+    void generateCastlingMoves(const Board& board, MoveList& moveList, Color side) {
+        uint8_t rights = board.getCastlingRights();
+        Bitboard occupied = board.getOccupied();
+        Color enemySide = (side == Color::White) ? Color::Black : Color::White;
+
+        if (side == Color::White) {
+            if (board.pieceAt(Square::E1) == Piece::WhiteKing) {
+                if (!board.isSquareAttacked(Square::E1, enemySide)) {
+                    if ((rights & WhiteKingSide) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::F1)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::G1)) &&
+                        !board.isSquareAttacked(Square::F1, enemySide) &&
+                        !board.isSquareAttacked(Square::G1, enemySide)) {
+                        moveList.add(Square::E1, Square::G1);
+                    }
+                    if ((rights & WhiteQueenSide) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::D1)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::C1)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::B1)) &&
+                        !board.isSquareAttacked(Square::D1, enemySide) &&
+                        !board.isSquareAttacked(Square::C1, enemySide)) {
+                        moveList.add(Square::E1, Square::C1);
+                    }
+                }
+            }
+        } else {
+            if (board.pieceAt(Square::E8) == Piece::BlackKing) {
+                if (!board.isSquareAttacked(Square::E8, enemySide)) {
+                    if ((rights & BlackKingSide) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::F8)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::G8)) &&
+                        !board.isSquareAttacked(Square::F8, enemySide) &&
+                        !board.isSquareAttacked(Square::G8, enemySide)) {
+                        moveList.add(Square::E8, Square::G8);
+                    }
+                    if ((rights & BlackQueenSide) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::D8)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::C8)) &&
+                        !BitboardOps::getBit(occupied, static_cast<int>(Square::B8)) &&
+                        !board.isSquareAttacked(Square::D8, enemySide) &&
+                        !board.isSquareAttacked(Square::C8, enemySide)) {
+                        moveList.add(Square::E8, Square::C8);
+                    }
+                }
             }
         }
     }
@@ -62,7 +110,6 @@ namespace MoveGen {
             int fromSquareIdx = BitboardOps::popLSB(kings);
             Square fromSquare = static_cast<Square>(fromSquareIdx);
 
-            // Instant lookup using precomputed king table
             Bitboard attacks = Attacks::kingAttacks[fromSquareIdx] & ~friendlyPieces;
 
             while (attacks) {
@@ -72,50 +119,6 @@ namespace MoveGen {
         }
 
         generateCastlingMoves(board, moveList, side);
-    }
-
-    void generateCastlingMoves(const Board& board, MoveList& moveList, Color side) {
-        uint8_t rights = board.getCastlingRights();
-        Bitboard occupied = board.getOccupied();
-        Color enemySide = (side == Color::White) ? Color::Black : Color::White;
-
-        if (side == Color::White) {
-            if (board.pieceAt(Square::E1) == Piece::WhiteKing) {
-                if (!board.isSquareAttacked(Square::E1, enemySide)) {
-                    if ((rights & WhiteKingSide) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::F1)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::G1)) &&
-                        !board.isSquareAttacked(Square::F1, enemySide)) {
-                        moveList.add(Square::E1, Square::G1);
-                    }
-                    if ((rights & WhiteQueenSide) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::D1)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::C1)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::B1)) &&
-                        !board.isSquareAttacked(Square::D1, enemySide)) {
-                        moveList.add(Square::E1, Square::C1);
-                    }
-                }
-            }
-        } else {
-            if (board.pieceAt(Square::E8) == Piece::BlackKing) {
-                if (!board.isSquareAttacked(Square::E8, enemySide)) {
-                    if ((rights & BlackKingSide) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::F8)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::G8)) &&
-                        !board.isSquareAttacked(Square::F8, enemySide)) {
-                        moveList.add(Square::E8, Square::G8);
-                    }
-                    if ((rights & BlackQueenSide) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::D8)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::C8)) &&
-                        !BitboardOps::getBit(occupied, static_cast<int>(Square::B8)) &&
-                        !board.isSquareAttacked(Square::D8, enemySide)) {
-                        moveList.add(Square::E8, Square::C8);
-                    }
-                }
-            }
-        }
     }
 
     void generatePawnMoves(const Board& board, MoveList& moveList, Color side) {
@@ -167,7 +170,8 @@ namespace MoveGen {
                         int doubleTargetIdx = doubleTargetRank * 8 + file;
                         Square doubleTargetSquare = static_cast<Square>(doubleTargetIdx);
 
-                        if (!BitboardOps::getBit(occupied, doubleTargetIdx)) {
+                        if (!BitboardOps::getBit(occupied, doubleTargetIdx) && 
+                            !BitboardOps::getBit(occupied, targetIdx)) {
                             moveList.add(fromSquare, doubleTargetSquare);
                         }
                     }
@@ -205,7 +209,7 @@ namespace MoveGen {
         generateSliderMoves(board, moveList, side, bishop);
 
         Piece queen = (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen;
-        generateSliderMoves(board, moveList, side, queen); // Queens use both rook and bishop tables
+        generateSliderMoves(board, moveList, side, queen);
 
         return moveList;
     }
