@@ -4,7 +4,6 @@
 #include <cmath>
 
 namespace {
-    // Piece values for MVV-LVA move ordering
     int getPieceValue(Piece piece) {
         switch (piece) {
             case Piece::WhitePawn:   case Piece::BlackPawn:   return 100;
@@ -63,25 +62,27 @@ int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
 
     Color side = board.getSideToMove();
     int histScore = historyTable[static_cast<int>(side)][static_cast<int>(move.getFromSquare())][static_cast<int>(move.getToSquare())];
-    
     return std::min(histScore, 10000);
 }
 
 void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int ply) {
-    int scores[256];
+    // Return early if there are 0 or 1 moves to prevent unsigned underflow
+    if (moves.count <= 1) return;
 
-    for (int i = 0; i < moves.count; i++) {
+    int scores[256];
+    int count = std::min(static_cast<int>(moves.count), 256);
+
+    for (int i = 0; i < count; i++) {
         scores[i] = scoreMove(board, moves.moves[i], ttMove, ply);
     }
 
-    for (int i = 0; i < moves.count - 1; i++) {
+    for (int i = 0; i < count - 1; i++) {
         int bestIndex = i;
-        for (int j = i + 1; j < moves.count; j++) {
+        for (int j = i + 1; j < count; j++) {
             if (scores[j] > scores[bestIndex]) {
                 bestIndex = j;
             }
         }
-
         std::swap(moves.moves[i], moves.moves[bestIndex]);
         std::swap(scores[i], scores[bestIndex]);
     }
@@ -89,6 +90,7 @@ void Searcher::orderMoves(const Board& board, MoveList& moves, Move ttMove, int 
 
 int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     info.nodes++;
+    if (info.checkLimits()) return 0;
 
     int standPat = Evaluate::evaluate(board);
     if (standPat >= beta) return beta;
@@ -96,8 +98,10 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
 
     MoveList captures;
     MoveGen::generateCaptureMoves(board, captures);
-
     orderMoves(board, captures, Move(), 64);
+
+    Color ourSide = board.getSideToMove();
+    Color opponentColor = (ourSide == Color::White) ? Color::Black : Color::White;
 
     for (int i = 0; i < captures.count; i++) {
         Move move = captures.moves[i];
@@ -105,8 +109,6 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
 
         if (!board.makeMove(move, undo)) continue;
 
-        Color opponentColor = board.getSideToMove();
-        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
         Bitboard kingBb = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
         if (kingBb != 0) {
             Square kingSq = static_cast<Square>(BitboardOps::getLSB(kingBb));
@@ -118,6 +120,8 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
 
         int score = -quiescence(board, -beta, -alpha, info);
         board.unmakeMove(move, undo);
+
+        if (info.stopped) return 0;
 
         if (score >= beta) return beta;
         if (score > alpha) alpha = score;
@@ -135,41 +139,37 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
     uint64_t key = board.getZobristKey();
     int originalAlpha = alpha;
 
-    Color side = board.getSideToMove();
-    Bitboard kingBb = board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing);
+    Color ourSide = board.getSideToMove();
+    Color opponentColor = (ourSide == Color::White) ? Color::Black : Color::White;
+
+    Bitboard kingBb = board.getPieces(ourSide == Color::White ? Piece::WhiteKing : Piece::BlackKing);
     bool inCheck = false;
     if (kingBb != 0) {
         Square kingSq = static_cast<Square>(BitboardOps::getLSB(kingBb));
-        inCheck = board.isSquareAttacked(kingSq, side == Color::White ? Color::Black : Color::White);
+        inCheck = board.isSquareAttacked(kingSq, opponentColor);
     }
 
-    // ALWAYS PROBE TT MOVE FIRST FOR MOVE ORDERING
-    Move ttBestMove = Move();
+    Move ttBestMove = tt.getStoredMove(key);
     int ttScore = 0;
-    if (tt.probe(key, depth, alpha, beta, ttScore, ttBestMove)) {
-        if (depth > 0) return ttScore; // Cache hit cutoff
-    }
-
-    if (depth >= 6 && ttBestMove == Move() && !inCheck) {
-        negamax(board, depth - 4, alpha, beta, info, ply);
-        int dummyScore = 0;
-        tt.probe(key, depth - 4, alpha, beta, dummyScore, ttBestMove);
+    if (depth > 0 && tt.probe(key, depth, alpha, beta, ttScore, ttBestMove)) {
+        return ttScore;
     }
 
     if (depth <= 0) {
         return quiescence(board, alpha, beta, info);
     }
 
-    // NULL MOVE PRUNING
+    // Null Move Pruning
     if (depth >= 3 && !inCheck) {
-        Bitboard nonPawnPieces = board.getPieces(side) & ~(board.getPieces(side == Color::White ? Piece::WhitePawn : Piece::BlackPawn) | board.getPieces(side == Color::White ? Piece::WhiteKing : Piece::BlackKing));
+        Bitboard nonPawnPieces = board.getPieces(ourSide) & ~(board.getPieces(ourSide == Color::White ? Piece::WhitePawn : Piece::BlackPawn) | board.getPieces(ourSide == Color::White ? Piece::WhiteKing : Piece::BlackKing));
 
         if (nonPawnPieces != 0) {
             Undo nullUndo;
             board.makeNullMove(nullUndo);
 
-            int R = 3 + depth / 4;
-            int score = -negamax(board, depth - 1 - R, -beta, -beta + 1, info, ply + 1);
+            int R = 2 + (depth > 6 ? 1 : 0);
+            int nextDepth = std::max(0, depth - 1 - R);
+            int score = -negamax(board, nextDepth, -beta, -beta + 1, info, ply + 1);
 
             board.unmakeNullMove(nullUndo);
 
@@ -190,8 +190,6 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         Undo undo;
         if (!board.makeMove(move, undo)) continue;
 
-        Color opponentColor = board.getSideToMove();
-        Color ourSide = (opponentColor == Color::White) ? Color::Black : Color::White;
         Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
         if (kingBitboard != 0) {
             Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
@@ -286,15 +284,17 @@ Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
         Move bestMoveThisDepth = moves.moves[0];
         int alpha = -INFINITY_SCORE;
         int beta = INFINITY_SCORE;
+        int window = 50;
 
         if (currentDepth >= 5) {
-            int window = 50;
             alpha = std::max(-INFINITY_SCORE, bestScoreThisDepth - window);
             beta = std::min(INFINITY_SCORE, bestScoreThisDepth + window);
         }
 
-        int failedWindowRetries = 0;
         while (true) {
+            int origAlpha = alpha;
+            int origBeta = beta;
+
             orderMoves(board, moves, bestMoveFound, 0);
 
             int localBestScore = -INFINITY_SCORE;
@@ -333,18 +333,10 @@ Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
 
             if (info.stopped) break;
 
-            if (currentDepth >= 5 && (localBestScore <= alpha || localBestScore >= beta)) {
-                failedWindowRetries++;
-                if (localBestScore <= alpha) {
-                    alpha = -INFINITY_SCORE;
-                } else {
-                    beta = INFINITY_SCORE;
-                }
-
-                if (failedWindowRetries > 2) {
-                    alpha = -INFINITY_SCORE;
-                    beta = INFINITY_SCORE;
-                }
+            if (currentDepth >= 5 && (localBestScore <= origAlpha || localBestScore >= origBeta)) {
+                window *= 2;
+                alpha = std::max(-INFINITY_SCORE, bestScoreThisDepth - window);
+                beta = std::min(INFINITY_SCORE, bestScoreThisDepth + window);
                 continue;
             }
 

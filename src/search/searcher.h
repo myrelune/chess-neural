@@ -60,6 +60,15 @@ public:
         }
     }
 
+    Move getStoredMove(uint64_t key) const {
+        size_t index = key % numEntries;
+        const TTEntry& entry = table[index];
+        if (entry.key == key) {
+            return entry.bestMove;
+        }
+        return Move();
+    }
+
     bool probe(uint64_t key, int depth, int alpha, int beta, int& outScore, Move& outBestMove) {
         size_t index = key % numEntries;
         const TTEntry& entry = table[index];
