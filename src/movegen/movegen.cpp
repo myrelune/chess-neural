@@ -170,7 +170,7 @@ namespace MoveGen {
                         int doubleTargetIdx = doubleTargetRank * 8 + file;
                         Square doubleTargetSquare = static_cast<Square>(doubleTargetIdx);
 
-                        if (!BitboardOps::getBit(occupied, doubleTargetIdx) && 
+                        if (!BitboardOps::getBit(occupied, doubleTargetIdx) &&
                             !BitboardOps::getBit(occupied, targetIdx)) {
                             moveList.add(fromSquare, doubleTargetSquare);
                         }
@@ -219,6 +219,7 @@ namespace MoveGen {
         MoveList legalMoves;
         Color side = board.getSideToMove();
         Color enemySide = (side == Color::White) ? Color::Black : Color::White;
+        Piece kingPiece = (side == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
 
         for (int i = 0; i < pseudoMoves.count; i++) {
             Move move = pseudoMoves.moves[i];
@@ -226,13 +227,10 @@ namespace MoveGen {
 
             if (!board.makeMove(move, undo)) continue;
 
-            Piece kingPiece = (side == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
+            // directly grab the king square from the updated board state
             Bitboard kingBitboard = board.getPieces(kingPiece);
-
             if (kingBitboard != 0) {
-                int kingSquareIdx = BitboardOps::getLSB(kingBitboard);
-                Square kingSquare = static_cast<Square>(kingSquareIdx);
-
+                Square kingSquare = static_cast<Square>(BitboardOps::getLSB(kingBitboard));
                 if (!board.isSquareAttacked(kingSquare, enemySide)) {
                     legalMoves.moves[legalMoves.count++] = move;
                 }

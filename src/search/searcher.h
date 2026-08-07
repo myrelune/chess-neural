@@ -15,17 +15,17 @@ constexpr int INFINITY_SCORE = 50000;
 // --- TRANSPOSITION TABLE DEFINITIONS ---
 enum class Bound : uint8_t {
     None = 0,
-    Exact = 1,     // PV node score (exact evaluation)
-    Lower = 2,     // Beta cutoff (score is at least this high)
-    Upper = 3      // Alpha cutoff (score is at most this low)
+    Exact = 1,
+    Lower = 2,
+    Upper = 3
 };
 
 struct TTEntry {
-    uint64_t key;       // Full Zobrist key to verify no hash collisions
-    int score;          // Evaluation score
-    int depth;          // Search depth at which this was evaluated
-    Bound bound;        // Exact, Lower, or Upper bound
-    Move bestMove;      // Best move found in this position
+    uint64_t key;
+    int score;
+    int depth;
+    Bound bound;
+    Move bestMove;
 };
 
 class TranspositionTable {
@@ -85,12 +85,11 @@ public:
         return false;
     }
 };
-// ---------------------------------------
 
 struct SearchLimits {
     int maxDepth = 64;
-    int moveTimeMs = 0;      // Fixed time per move (0 if unused)
-    uint64_t maxNodes = 0;   // Node limit (0 if unused)
+    int moveTimeMs = 0;
+    uint64_t maxNodes = 0;
 };
 
 struct SearchInfo {

@@ -8,9 +8,6 @@
 #include <sstream>
 #include <cctype>
 
-// ---------------------------------------------------------------------------
-// Incremental Zobrist helpers — tiny private methods so callsites stay clean
-// ---------------------------------------------------------------------------
 inline void Board::zxorPiece(Piece p, int sq) {
     zobristKey ^= Zobrist::pieceKeys[pieceIndex(p)][sq];
 }
@@ -25,7 +22,6 @@ inline void Board::zxorSide() {
     zobristKey ^= Zobrist::sideKey;
 }
 
-// ---------------------------------------------------------------------------
 Board::Board() {
     reset();
 }
@@ -104,10 +100,6 @@ void Board::reset() {
     zobristKey = computeZobristKey();
 }
 
-// ---------------------------------------------------------------------------
-// Low-level piece placement — keeps bitboards + mailbox in sync.
-// NOTE: does NOT touch zobristKey; callers handle Zobrist incrementally.
-// ---------------------------------------------------------------------------
 void Board::setPiece(Square square, Piece piece) {
     if (piece == Piece::None)
         return;
@@ -267,9 +259,6 @@ void Board::loadFEN(const std::string& fen) {
     zobristKey = computeZobristKey();
 }
 
-// ---------------------------------------------------------------------------
-// makeMove — fully incremental Zobrist updates, O(1) pieceAt via mailbox
-// ---------------------------------------------------------------------------
 bool Board::makeMove(const Move& move, Undo& undo) {
     // Save full state needed for unmake
     undo.castlingRights  = castlingRights;
@@ -283,8 +272,6 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     if (movingPiece == Piece::None) return false;
 
     Piece targetPiece = mailbox[static_cast<int>(move.to)];
-
-    // --- Incremental Zobrist: strip out everything that's about to change ---
 
     // Side key flips every move
     zxorSide();
@@ -379,9 +366,6 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// unmakeMove — restore Zobrist key from Undo in one assignment (zero recompute)
-// ---------------------------------------------------------------------------
 void Board::unmakeMove(const Move& move, const Undo& undo) {
     sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
 
@@ -426,7 +410,6 @@ void Board::unmakeMove(const Move& move, const Undo& undo) {
     if (!posHistory.empty()) posHistory.pop_back();
 }
 
-// ---------------------------------------------------------------------------
 bool Board::isRepetition() const {
     // Current position key = zobristKey.
     // Check if it has appeared at least once before in history (twofold = draw)
@@ -456,9 +439,6 @@ bool Board::isSquareAttacked(Square square, Color attackerColor) const {
     return Attacks::isSquareAttacked(*this, square, attackerColor);
 }
 
-// ---------------------------------------------------------------------------
-// Full Zobrist recompute — only called from reset() and loadFEN()
-// ---------------------------------------------------------------------------
 uint64_t Board::computeZobristKey() const {
     uint64_t key = 0;
 
@@ -479,7 +459,6 @@ uint64_t Board::computeZobristKey() const {
     return key;
 }
 
-// ---------------------------------------------------------------------------
 void Board::makeNullMove(Undo& undo) {
     undo.castlingRights  = castlingRights;
     undo.enPassantSquare = enPassantSquare;

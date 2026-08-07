@@ -119,22 +119,22 @@ namespace Uci {
 
                 if (depth > 0) {
                     limits.maxDepth = depth;
-                } 
+                }
                 else if (movetime > 0) {
                     limits.moveTimeMs = movetime;
-                } 
+                }
                 else if (wtime > 0 || btime > 0) {
                     Color side = board.getSideToMove();
                     int remainingTime = (side == Color::White) ? wtime : btime;
                     int increment = (side == Color::White) ? winc : binc;
 
                     int allocated = (remainingTime / 30) + (increment / 2);
-                    
+
                     if (allocated > remainingTime - 50) allocated = remainingTime - 50;
                     if (allocated < 10) allocated = 10;
 
                     limits.moveTimeMs = allocated;
-                } 
+                }
                 else {
                     limits.maxDepth = 10;
                 }
