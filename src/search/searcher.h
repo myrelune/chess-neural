@@ -131,7 +131,7 @@ struct SearchInfo {
 
 class Searcher {
 public:
-    Searcher() : tt(16) {
+    Searcher(size_t hashSizeMb = 16) : tt(hashSizeMb) {
         // Load the Polyglot opening book on startup (adjust path if needed)
         if (!book.loadEmbedded()) {
             std::cout << "info string Warning: Could not load embedded opening book\n";

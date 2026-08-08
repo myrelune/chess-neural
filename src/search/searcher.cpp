@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <iostream>
 #include <cmath>
+#include <random>
 
 namespace {
     int getPieceValue(Piece piece) {
@@ -96,6 +97,10 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     if (standPat >= beta) return beta;
     if (standPat > alpha) alpha = standPat;
 
+    // Delta pruning: if even capturing the most valuable piece can't raise alpha, bail out
+    constexpr int DELTA_MARGIN = 900; // queen value
+    if (standPat + DELTA_MARGIN < alpha) return alpha;
+
     MoveList captures;
     MoveGen::generateCaptureMoves(board, captures);
     orderMoves(board, captures, Move(), 64);
@@ -106,6 +111,10 @@ int Searcher::quiescence(Board& board, int alpha, int beta, SearchInfo& info) {
     for (int i = 0; i < captures.count; i++) {
         Move move = captures.moves[i];
         Undo undo;
+
+        // Per-capture delta: skip if this specific capture can't raise alpha
+        Piece captured = board.pieceAt(move.getToSquare());
+        if (captured != Piece::None && standPat + getPieceValue(captured) + 200 < alpha) continue;
 
         if (!board.makeMove(move, undo)) continue;
 
@@ -155,8 +164,18 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         return ttScore;
     }
 
+    // Check extension: when in check, extend depth by 1 to avoid missing forced mates
+    if (inCheck) depth++;
+
     if (depth <= 0) {
         return quiescence(board, alpha, beta, info);
+    }
+
+    // Reverse futility pruning: if eval is well above beta at shallow depth, return early
+    if (depth <= 6 && !inCheck) {
+        int staticEval = Evaluate::evaluate(board);
+        int rfpMargin = 80 * depth;
+        if (staticEval - rfpMargin >= beta) return staticEval - rfpMargin;
     }
 
     // Null Move Pruning
@@ -181,6 +200,12 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
     MoveList moves = MoveGen::generateMoves(board);
     orderMoves(board, moves, ttBestMove, ply);
 
+    // Futility pruning setup: at depth 1-2, compute static eval once for the move loop
+    int staticEval = -INFINITY_SCORE;
+    bool doFutility = (depth <= 2 && !inCheck);
+    if (doFutility) staticEval = Evaluate::evaluate(board);
+    constexpr int FUTILITY_MARGIN[3] = {0, 150, 300};
+
     int bestScore = -INFINITY_SCORE;
     Move currentBestMove = Move();
     int legalMovesCount = 0;
@@ -203,6 +228,13 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
         }
 
         legalMovesCount++;
+
+        // Futility pruning: skip quiet moves that can't raise alpha even with a margin
+        if (doFutility && !isCapture && move.promotion == Piece::None
+                && staticEval + FUTILITY_MARGIN[depth] <= alpha) {
+            board.unmakeMove(move, undo);
+            continue;
+        }
 
         bool givesCheck = false;
 
@@ -272,13 +304,18 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
 }
 
 Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
-    // 1. Check Opening Book First
+    // Check Opening Book First
     auto bookMoves = book.getBookMoves(board.getZobristKey());
     if (!bookMoves.empty()) {
-        auto bestEntry = *std::max_element(bookMoves.begin(), bookMoves.end(),
-            [](const PolyEntry& a, const PolyEntry& b) {
-                return a.weight < b.weight;
-            });
+        std::vector<int> weights;
+        weights.reserve(bookMoves.size());
+        for (const auto& e : bookMoves)
+            weights.push_back(static_cast<int>(e.weight));
+
+        std::random_device rd;
+        std::mt19937 rng(rd());
+        std::discrete_distribution<int> dist(weights.begin(), weights.end());
+        const PolyEntry& bestEntry = bookMoves[dist(rng)];
 
         Move selectedMove = book.decodePolyglotMove(bestEntry.move, board);
 

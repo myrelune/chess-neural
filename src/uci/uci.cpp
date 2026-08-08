@@ -12,6 +12,7 @@ namespace Uci {
     void loop() {
         Board board;
         board.reset();
+        int hashSizeMb = 16;
 
         std::string line;
         while (std::getline(std::cin, line)) {
@@ -32,8 +33,15 @@ namespace Uci {
                 std::cout << "readyok\n" << std::flush;
             }
             else if (token == "setoption") {
-                std::string restOfLine;
-                std::getline(ss, restOfLine);
+                std::string name, value, tok;
+                while (ss >> tok) {
+                    if (tok == "value") break;
+                    if (tok != "name") name += (name.empty() ? "" : " ") + tok;
+                }
+                ss >> value;
+                if (name == "Hash") {
+                    try { hashSizeMb = std::stoi(value); } catch (...) {}
+                }
             }
             else if (token == "ucinewgame") {
                 board.reset();
@@ -139,7 +147,7 @@ namespace Uci {
                     limits.maxDepth = 10;
                 }
 
-                Searcher searcher;
+                Searcher searcher(hashSizeMb);
                 Move bestMove = searcher.findBestMove(board, limits);
 
                 if (bestMove != Move()) {
