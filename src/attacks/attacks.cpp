@@ -1,5 +1,4 @@
 #include "attacks.h"
-#include "../board/board.h"
 #include <vector>
 #include <algorithm>
 

@@ -26,8 +26,9 @@ namespace Evaluate
     int evaluatePieceSquareTables(const Board& board, int& gamePhase);
     int evaluatePawnStructure(const Board& board);
     int evaluateMobility(const Board& board);
-    int evaluateKingSafety(const Board& board);
+    int evaluateKingSafety(const Board& board, int gamePhase);
     int evaluateBishopPair(const Board& board);
     int evaluateRooks(const Board& board);
+    int evaluateMinorPieceStructure(const Board& board);
     int evaluateTempo(const Board& board);
 }

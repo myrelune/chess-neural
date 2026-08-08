@@ -1,4 +1,5 @@
 #include "searcher.h"
+#include "../attacks/attacks.h"
 #include <algorithm>
 #include <iostream>
 #include <cmath>
@@ -15,6 +16,75 @@ namespace {
             case Piece::WhiteKing:   case Piece::BlackKing:   return 20000;
             default: return 0;
         }
+    }
+
+    bool isPawn(Piece piece) {
+        return piece == Piece::WhitePawn || piece == Piece::BlackPawn;
+    }
+
+    /* Static exchange evaluation.  It repeatedly selects the least valuable
+        attacker of the contested square and updates x-rays after each swap. */
+    int staticExchangeEval(const Board& board, Move move) {
+        const int to = static_cast<int>(move.getToSquare());
+        const int from = static_cast<int>(move.getFromSquare());
+        Piece moving = board.pieceAt(move.getFromSquare());
+        Piece captured = board.pieceAt(move.getToSquare());
+        if (moving == Piece::None) return 0;
+
+        Bitboard pieces[12];
+        for (int p = 0; p < 12; ++p) pieces[p] = board.getPieces(static_cast<Piece>(p + 1));
+
+        const bool enPassant = isPawn(moving) && captured == Piece::None &&
+            board.getEnPassantSquare() == move.getToSquare();
+        const int capturedSq = enPassant ? to + (pieceColor(moving) == Color::White ? -8 : 8) : to;
+        if (enPassant) captured = pieceColor(moving) == Color::White ? Piece::BlackPawn : Piece::WhitePawn;
+
+        Piece promoted = move.promotion == Piece::None ? moving : move.promotion;
+        int gain[32] = { getPieceValue(captured) + getPieceValue(promoted) - getPieceValue(moving) };
+        Bitboard occupied = board.getOccupied();
+        pieces[pieceIndex(moving)] &= ~(1ULL << from);
+        if (captured != Piece::None) pieces[pieceIndex(captured)] &= ~(1ULL << capturedSq);
+        pieces[pieceIndex(promoted)] |= (1ULL << to);
+        occupied &= ~(1ULL << from);
+        occupied &= ~(1ULL << capturedSq);
+        occupied |= (1ULL << to);
+
+        Color side = pieceColor(moving) == Color::White ? Color::Black : Color::White;
+        Piece onTarget = promoted;
+        int depth = 0;
+        while (depth < 30) {
+            const int offset = side == Color::White ? 0 : 6;
+            Bitboard attackers = 0;
+            attackers |= (side == Color::White ? Attacks::blackPawnAttacks[to] : Attacks::whitePawnAttacks[to]) & pieces[offset];
+            attackers |= Attacks::knightAttacks[to] & pieces[offset + 1];
+            attackers |= Attacks::bishopAttacksBB(move.getToSquare(), occupied) & (pieces[offset + 2] | pieces[offset + 4]);
+            attackers |= Attacks::rookAttacksBB(move.getToSquare(), occupied) & (pieces[offset + 3] | pieces[offset + 4]);
+            attackers |= Attacks::kingAttacks[to] & pieces[offset + 5];
+            if (!attackers) break;
+
+            Piece attacker = Piece::None;
+            int attackerSq = -1;
+            for (int type = 0; type < 6 && attacker == Piece::None; ++type) {
+                Bitboard candidates = attackers & pieces[offset + type];
+                if (candidates) {
+                    attackerSq = BitboardOps::getLSB(candidates);
+                    attacker = static_cast<Piece>(offset + type + 1);
+                }
+            }
+            ++depth;
+            gain[depth] = getPieceValue(onTarget) - gain[depth - 1];
+            pieces[pieceIndex(onTarget)] &= ~(1ULL << to);
+            pieces[pieceIndex(attacker)] &= ~(1ULL << attackerSq);
+            pieces[pieceIndex(attacker)] |= (1ULL << to);
+            occupied &= ~(1ULL << attackerSq);
+            onTarget = attacker;
+            side = side == Color::White ? Color::Black : Color::White;
+        }
+        while (depth > 0) {
+            --depth;
+            gain[depth] = -std::max(-gain[depth], gain[depth + 1]);
+        }
+        return gain[0];
     }
 
     int LMRTable[64][256];
@@ -51,9 +121,10 @@ int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
     if (move == bestMoveFound) return 25000;
 
     Piece target = board.pieceAt(move.getToSquare());
-    if (target != Piece::None) {
+    if (target != Piece::None || move.promotion != Piece::None ||
+        (isPawn(board.pieceAt(move.getFromSquare())) && board.getEnPassantSquare() == move.getToSquare())) {
         Piece attacker = board.pieceAt(move.getFromSquare());
-        return 20000 + getPieceValue(target) - (getPieceValue(attacker) / 10);
+        return 20000 + staticExchangeEval(board, move) + getPieceValue(target) - (getPieceValue(attacker) / 10);
     }
 
     if (ply < 64) {
