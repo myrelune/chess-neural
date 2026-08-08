@@ -16,10 +16,23 @@ namespace {
         MoveList pseudoMoves = MoveGen::generateMoves(board);
         unsigned long long nodes = 0;
 
+        Color ourSide = board.getSideToMove();
+        Color opponentColor = (ourSide == Color::White) ? Color::Black : Color::White;
+        Piece kingPiece = (ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing;
+
         for (int i = 0; i < pseudoMoves.count; ++i) {
             Undo undo;
             if (!board.makeMove(pseudoMoves.moves[i], undo)) {
                 continue;
+            }
+
+            Bitboard kingBb = board.getPieces(kingPiece);
+            if (kingBb != 0) {
+                Square kingSq = static_cast<Square>(BitboardOps::getLSB(kingBb));
+                if (board.isSquareAttacked(kingSq, opponentColor)) {
+                    board.unmakeMove(pseudoMoves.moves[i], undo);
+                    continue;
+                }
             }
 
             nodes += perft(depth - 1, board);

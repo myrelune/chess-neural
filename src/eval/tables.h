@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../board/bitboard.h"
+
 namespace Tables {
 
 extern const int mgValue[6];
@@ -30,6 +32,9 @@ extern int mgTable[13][64];
 extern int egTable[13][64];
 
 extern const int gamePhaseInc[13];
+
+extern Bitboard whitePassedMask[64];
+extern Bitboard blackPassedMask[64];
 
 void initTables();
 

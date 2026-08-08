@@ -35,12 +35,48 @@ namespace Attacks {
                                  : blackPawnAttacks[static_cast<int>(s)];
     }
 
-    Bitboard rookAttacksBB(Square s, Bitboard occupied);
-    Bitboard bishopAttacksBB(Square s, Bitboard occupied);
+    inline Bitboard rookAttacksBB(Square s, Bitboard occupied) {
+        int sq = static_cast<int>(s);
+        Bitboard occ = occupied & rookMasks[sq];
+        occ *= rookMagics[sq];
+        occ >>= rookShifts[sq];
+        return rookAttacks[sq][occ];
+    }
+
+    inline Bitboard bishopAttacksBB(Square s, Bitboard occupied) {
+        int sq = static_cast<int>(s);
+        Bitboard occ = occupied & bishopMasks[sq];
+        occ *= bishopMagics[sq];
+        occ >>= bishopShifts[sq];
+        return bishopAttacks[sq][occ];
+    }
+
     inline Bitboard queenAttacksBB(Square s, Bitboard occupied) {
         return rookAttacksBB(s, occupied) | bishopAttacksBB(s, occupied);
     }
 
-    bool isSquareAttacked(const Board& board, Square square, Color attackerColor);
+    inline bool isSquareAttacked(const Board& board, Square square, Color attackerColor) {
+        Bitboard occ = board.getOccupied();
+        int sqIdx = static_cast<int>(square);
+
+        if (attackerColor == Color::White) {
+            if (blackPawnAttacks[sqIdx] & board.getPieces(Piece::WhitePawn)) return true;
+            if (knightAttacks[sqIdx] & board.getPieces(Piece::WhiteKnight)) return true;
+            if (kingAttacks[sqIdx] & board.getPieces(Piece::WhiteKing)) return true;
+        } else {
+            if (whitePawnAttacks[sqIdx] & board.getPieces(Piece::BlackPawn)) return true;
+            if (knightAttacks[sqIdx] & board.getPieces(Piece::BlackKnight)) return true;
+            if (kingAttacks[sqIdx] & board.getPieces(Piece::BlackKing)) return true;
+        }
+
+        Bitboard bishops = board.getPieces(attackerColor == Color::White ? Piece::WhiteBishop : Piece::BlackBishop);
+        Bitboard rooks   = board.getPieces(attackerColor == Color::White ? Piece::WhiteRook   : Piece::BlackRook);
+        Bitboard queens  = board.getPieces(attackerColor == Color::White ? Piece::WhiteQueen  : Piece::BlackQueen);
+
+        if ((bishops | queens) && (bishopAttacksBB(square, occ) & (bishops | queens))) return true;
+        if ((rooks | queens) && (rookAttacksBB(square, occ) & (rooks | queens))) return true;
+
+        return false;
+    }
 }
 

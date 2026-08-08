@@ -189,52 +189,7 @@ namespace Attacks {
         }
     }
 
-    // Lookups via Magic Bitboards
-    Bitboard rookAttacksBB(Square s, Bitboard occupied) {
-        int sq = static_cast<int>(s);
-        occupied &= rookMasks[sq];
-        occupied *= rookMagics[sq];
-        occupied >>= rookShifts[sq];
-        return rookAttacks[sq][occupied];
-    }
 
-    Bitboard bishopAttacksBB(Square s, Bitboard occupied) {
-        int sq = static_cast<int>(s);
-        occupied &= bishopMasks[sq];
-        occupied *= bishopMagics[sq];
-        occupied >>= bishopShifts[sq];
-        return bishopAttacks[sq][occupied];
-    }
-
-    // Attack Validation Routine
-    bool isSquareAttacked(const Board& board, Square square, Color attackerColor) {
-        Bitboard occ = board.getOccupied();
-        int sqIdx = static_cast<int>(square);
-
-        // Knights & Kings
-        if (attackerColor == Color::White) {
-            if (blackPawnAttacks[sqIdx] & board.getPieces(Piece::WhitePawn)) return true;
-            if (knightAttacks[sqIdx] & board.getPieces(Piece::WhiteKnight)) return true;
-            if (kingAttacks[sqIdx] & board.getPieces(Piece::WhiteKing)) return true;
-        } else {
-            if (whitePawnAttacks[sqIdx] & board.getPieces(Piece::BlackPawn)) return true;
-            if (knightAttacks[sqIdx] & board.getPieces(Piece::BlackKnight)) return true;
-            if (kingAttacks[sqIdx] & board.getPieces(Piece::BlackKing)) return true;
-        }
-
-        // Sliders
-        Bitboard bishops = board.getPieces(attackerColor == Color::White ? Piece::WhiteBishop : Piece::BlackBishop);
-        Bitboard rooks   = board.getPieces(attackerColor == Color::White ? Piece::WhiteRook   : Piece::BlackRook);
-        Bitboard queens  = board.getPieces(attackerColor == Color::White ? Piece::WhiteQueen  : Piece::BlackQueen);
-
-        // Check diagonal sliders (Bishop + Queen)
-        if ((bishops | queens) && (bishopAttacksBB(square, occ) & (bishops | queens))) return true;
-
-        // Check orthogonal sliders (Rook + Queen)
-        if ((rooks | queens) && (rookAttacksBB(square, occ) & (rooks | queens))) return true;
-
-        return false;
-    }
 
     void initSlidingPieces(bool isRook) {
         for (int sq = 0; sq < 64; ++sq) {

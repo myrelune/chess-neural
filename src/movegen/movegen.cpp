@@ -5,30 +5,37 @@
 namespace MoveGen {
 
     // Fast Slider Generation via Magic Bitboards
-    void generateSliderMoves(const Board& board, MoveList& moveList, Color side, Piece pieceType) {
-        Bitboard pieces = board.getPieces(pieceType);
+    inline void generateSliderMoves(const Board& board, MoveList& moveList, Color side) {
         Bitboard friendlyPieces = (side == Color::White) ? board.getWhitePieces() : board.getBlackPieces();
         Bitboard occupied = board.getOccupied();
 
-        bool generatesRook = (pieceType == Piece::WhiteRook || pieceType == Piece::BlackRook ||
-                              pieceType == Piece::WhiteQueen || pieceType == Piece::BlackQueen);
-        bool generatesBishop = (pieceType == Piece::WhiteBishop || pieceType == Piece::BlackBishop ||
-                                pieceType == Piece::WhiteQueen || pieceType == Piece::BlackQueen);
-
-        while (pieces) {
-            int fromSquareIdx = BitboardOps::popLSB(pieces);
-            Square fromSquare = static_cast<Square>(fromSquareIdx);
-
-            Bitboard attacks = 0ULL;
-            if (generatesRook)   attacks |= Attacks::rookAttacksBB(fromSquare, occupied);
-            if (generatesBishop) attacks |= Attacks::bishopAttacksBB(fromSquare, occupied);
-
-            attacks &= ~friendlyPieces;
-
+        // Rooks
+        Bitboard rooks = (side == Color::White) ? board.getPieces(Piece::WhiteRook) : board.getPieces(Piece::BlackRook);
+        while (rooks) {
+            Square fromSquare = static_cast<Square>(BitboardOps::popLSB(rooks));
+            Bitboard attacks = Attacks::rookAttacksBB(fromSquare, occupied) & ~friendlyPieces;
             while (attacks) {
-                int targetIdx = BitboardOps::popLSB(attacks);
-                Square targetSquare = static_cast<Square>(targetIdx);
-                moveList.add(fromSquare, targetSquare);
+                moveList.add(fromSquare, static_cast<Square>(BitboardOps::popLSB(attacks)));
+            }
+        }
+
+        // Bishops
+        Bitboard bishops = (side == Color::White) ? board.getPieces(Piece::WhiteBishop) : board.getPieces(Piece::BlackBishop);
+        while (bishops) {
+            Square fromSquare = static_cast<Square>(BitboardOps::popLSB(bishops));
+            Bitboard attacks = Attacks::bishopAttacksBB(fromSquare, occupied) & ~friendlyPieces;
+            while (attacks) {
+                moveList.add(fromSquare, static_cast<Square>(BitboardOps::popLSB(attacks)));
+            }
+        }
+
+        // Queens
+        Bitboard queens = (side == Color::White) ? board.getPieces(Piece::WhiteQueen) : board.getPieces(Piece::BlackQueen);
+        while (queens) {
+            Square fromSquare = static_cast<Square>(BitboardOps::popLSB(queens));
+            Bitboard attacks = (Attacks::rookAttacksBB(fromSquare, occupied) | Attacks::bishopAttacksBB(fromSquare, occupied)) & ~friendlyPieces;
+            while (attacks) {
+                moveList.add(fromSquare, static_cast<Square>(BitboardOps::popLSB(attacks)));
             }
         }
     }
@@ -121,75 +128,144 @@ namespace MoveGen {
         generateCastlingMoves(board, moveList, side);
     }
 
+    constexpr Bitboard FILE_A = 0x0101010101010101ULL;
+    constexpr Bitboard FILE_H = 0x8080808080808080ULL;
+    constexpr Bitboard RANK_1 = 0x00000000000000FFULL;
+    constexpr Bitboard RANK_8 = 0xFF00000000000000ULL;
+
     void generatePawnMoves(const Board& board, MoveList& moveList, Color side) {
-        Piece pawnPiece = (side == Color::White) ? Piece::WhitePawn : Piece::BlackPawn;
-        Bitboard pawns = board.getPieces(pawnPiece);
         Bitboard occupied = board.getOccupied();
-        Bitboard enemyPieces = (side == Color::White) ? board.getBlackPieces() : board.getWhitePieces();
+        Square epSq = board.getEnPassantSquare();
 
-        int startRank = (side == Color::White) ? 1 : 6;
-        int promotionRank = (side == Color::White) ? 7 : 0;
+        if (side == Color::White) {
+            Bitboard pawns = board.getPieces(Piece::WhitePawn);
+            Bitboard enemyPieces = board.getBlackPieces();
+            Bitboard targets = enemyPieces | (epSq != Square::None ? (1ULL << static_cast<int>(epSq)) : 0ULL);
 
-        auto addPawnMove = [&](Square from, Square to, int targetRank) {
-            if (targetRank == promotionRank) {
-                if (side == Color::White) {
-                    moveList.add(from, to, Piece::WhiteQueen);
-                    moveList.add(from, to, Piece::WhiteRook);
-                    moveList.add(from, to, Piece::WhiteBishop);
-                    moveList.add(from, to, Piece::WhiteKnight);
-                } else {
-                    moveList.add(from, to, Piece::BlackQueen);
-                    moveList.add(from, to, Piece::BlackRook);
-                    moveList.add(from, to, Piece::BlackBishop);
-                    moveList.add(from, to, Piece::BlackKnight);
-                }
-            } else {
-                moveList.add(from, to);
+            // Single Push (+8)
+            Bitboard singlePush = (pawns << 8) & ~occupied;
+            Bitboard singlePushNoPromo = singlePush & ~RANK_8;
+            while (singlePushNoPromo) {
+                int to = BitboardOps::popLSB(singlePushNoPromo);
+                moveList.add(static_cast<Square>(to - 8), static_cast<Square>(to));
             }
-        };
-
-        while (pawns) {
-            int fromSquareIdx = BitboardOps::popLSB(pawns);
-
-            Square fromSquare = static_cast<Square>(fromSquareIdx);
-            int rank = fromSquareIdx / 8;
-            int file = fromSquareIdx % 8;
-
-            // Single Push
-            int targetRank = rank + (side == Color::White ? 1 : -1);
-            if (targetRank >= 0 && targetRank < 8) {
-                int targetIdx = targetRank * 8 + file;
-                Square targetSquare = static_cast<Square>(targetIdx);
-
-                if (!BitboardOps::getBit(occupied, targetIdx)) {
-                    addPawnMove(fromSquare, targetSquare, targetRank);
-
-                    // Double Push
-                    if (rank == startRank) {
-                        int doubleTargetRank = rank + (side == Color::White ? 2 : -2);
-                        int doubleTargetIdx = doubleTargetRank * 8 + file;
-                        Square doubleTargetSquare = static_cast<Square>(doubleTargetIdx);
-
-                        if (!BitboardOps::getBit(occupied, doubleTargetIdx) &&
-                            !BitboardOps::getBit(occupied, targetIdx)) {
-                            moveList.add(fromSquare, doubleTargetSquare);
-                        }
-                    }
-                }
+            Bitboard singlePushPromo = singlePush & RANK_8;
+            while (singlePushPromo) {
+                int to = BitboardOps::popLSB(singlePushPromo);
+                Square from = static_cast<Square>(to - 8);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::WhiteQueen);
+                moveList.add(from, target, Piece::WhiteRook);
+                moveList.add(from, target, Piece::WhiteBishop);
+                moveList.add(from, target, Piece::WhiteKnight);
             }
 
-            // Captures
-            int captureFiles[2] = { file - 1, file + 1 };
-            for (int cf : captureFiles) {
-                if (cf >= 0 && cf < 8 && targetRank >= 0 && targetRank < 8) {
-                    int targetIdx = targetRank * 8 + cf;
-                    Square targetSquare = static_cast<Square>(targetIdx);
+            // Double Push (+16 from Rank 2)
+            Bitboard doublePush = ((singlePush & 0x0000000000FF0000ULL) << 8) & ~occupied;
+            while (doublePush) {
+                int to = BitboardOps::popLSB(doublePush);
+                moveList.add(static_cast<Square>(to - 16), static_cast<Square>(to));
+            }
 
-                    if (BitboardOps::getBit(enemyPieces, targetIdx) ||
-                        (board.getEnPassantSquare() != Square::None && targetSquare == board.getEnPassantSquare())) {
-                        addPawnMove(fromSquare, targetSquare, targetRank);
-                    }
-                }
+            // Captures Left (NW = +7)
+            Bitboard capLeft = ((pawns & ~FILE_A) << 7) & targets;
+            Bitboard capLeftNoPromo = capLeft & ~RANK_8;
+            while (capLeftNoPromo) {
+                int to = BitboardOps::popLSB(capLeftNoPromo);
+                moveList.add(static_cast<Square>(to - 7), static_cast<Square>(to));
+            }
+            Bitboard capLeftPromo = capLeft & RANK_8;
+            while (capLeftPromo) {
+                int to = BitboardOps::popLSB(capLeftPromo);
+                Square from = static_cast<Square>(to - 7);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::WhiteQueen);
+                moveList.add(from, target, Piece::WhiteRook);
+                moveList.add(from, target, Piece::WhiteBishop);
+                moveList.add(from, target, Piece::WhiteKnight);
+            }
+
+            // Captures Right (NE = +9)
+            Bitboard capRight = ((pawns & ~FILE_H) << 9) & targets;
+            Bitboard capRightNoPromo = capRight & ~RANK_8;
+            while (capRightNoPromo) {
+                int to = BitboardOps::popLSB(capRightNoPromo);
+                moveList.add(static_cast<Square>(to - 9), static_cast<Square>(to));
+            }
+            Bitboard capRightPromo = capRight & RANK_8;
+            while (capRightPromo) {
+                int to = BitboardOps::popLSB(capRightPromo);
+                Square from = static_cast<Square>(to - 9);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::WhiteQueen);
+                moveList.add(from, target, Piece::WhiteRook);
+                moveList.add(from, target, Piece::WhiteBishop);
+                moveList.add(from, target, Piece::WhiteKnight);
+            }
+        } else {
+            Bitboard pawns = board.getPieces(Piece::BlackPawn);
+            Bitboard enemyPieces = board.getWhitePieces();
+            Bitboard targets = enemyPieces | (epSq != Square::None ? (1ULL << static_cast<int>(epSq)) : 0ULL);
+
+            // Single Push (-8)
+            Bitboard singlePush = (pawns >> 8) & ~occupied;
+            Bitboard singlePushNoPromo = singlePush & ~RANK_1;
+            while (singlePushNoPromo) {
+                int to = BitboardOps::popLSB(singlePushNoPromo);
+                moveList.add(static_cast<Square>(to + 8), static_cast<Square>(to));
+            }
+            Bitboard singlePushPromo = singlePush & RANK_1;
+            while (singlePushPromo) {
+                int to = BitboardOps::popLSB(singlePushPromo);
+                Square from = static_cast<Square>(to + 8);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::BlackQueen);
+                moveList.add(from, target, Piece::BlackRook);
+                moveList.add(from, target, Piece::BlackBishop);
+                moveList.add(from, target, Piece::BlackKnight);
+            }
+
+            // Double Push (-16 from Rank 7)
+            Bitboard doublePush = ((singlePush & 0x0000FF0000000000ULL) >> 8) & ~occupied;
+            while (doublePush) {
+                int to = BitboardOps::popLSB(doublePush);
+                moveList.add(static_cast<Square>(to + 16), static_cast<Square>(to));
+            }
+
+            // Captures Left (SW = -9)
+            Bitboard capLeft = ((pawns & ~FILE_A) >> 9) & targets;
+            Bitboard capLeftNoPromo = capLeft & ~RANK_1;
+            while (capLeftNoPromo) {
+                int to = BitboardOps::popLSB(capLeftNoPromo);
+                moveList.add(static_cast<Square>(to + 9), static_cast<Square>(to));
+            }
+            Bitboard capLeftPromo = capLeft & RANK_1;
+            while (capLeftPromo) {
+                int to = BitboardOps::popLSB(capLeftPromo);
+                Square from = static_cast<Square>(to + 9);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::BlackQueen);
+                moveList.add(from, target, Piece::BlackRook);
+                moveList.add(from, target, Piece::BlackBishop);
+                moveList.add(from, target, Piece::BlackKnight);
+            }
+
+            // Captures Right (SE = -7)
+            Bitboard capRight = ((pawns & ~FILE_H) >> 7) & targets;
+            Bitboard capRightNoPromo = capRight & ~RANK_1;
+            while (capRightNoPromo) {
+                int to = BitboardOps::popLSB(capRightNoPromo);
+                moveList.add(static_cast<Square>(to + 7), static_cast<Square>(to));
+            }
+            Bitboard capRightPromo = capRight & RANK_1;
+            while (capRightPromo) {
+                int to = BitboardOps::popLSB(capRightPromo);
+                Square from = static_cast<Square>(to + 7);
+                Square target = static_cast<Square>(to);
+                moveList.add(from, target, Piece::BlackQueen);
+                moveList.add(from, target, Piece::BlackRook);
+                moveList.add(from, target, Piece::BlackBishop);
+                moveList.add(from, target, Piece::BlackKnight);
             }
         }
     }
@@ -300,15 +376,7 @@ namespace MoveGen {
         generateKnightMoves(board, moveList, side);
         generateKingMoves(board, moveList, side);
         generatePawnMoves(board, moveList, side);
-
-        Piece rook = (side == Color::White) ? Piece::WhiteRook : Piece::BlackRook;
-        generateSliderMoves(board, moveList, side, rook);
-
-        Piece bishop = (side == Color::White) ? Piece::WhiteBishop : Piece::BlackBishop;
-        generateSliderMoves(board, moveList, side, bishop);
-
-        Piece queen = (side == Color::White) ? Piece::WhiteQueen : Piece::BlackQueen;
-        generateSliderMoves(board, moveList, side, queen);
+        generateSliderMoves(board, moveList, side);
 
         return moveList;
     }

@@ -173,6 +173,9 @@ namespace Tables {
     int mgTable[13][64];
     int egTable[13][64];
 
+    Bitboard whitePassedMask[64];
+    Bitboard blackPassedMask[64];
+
     const int gamePhaseInc[13] = {
         0, // None
 
@@ -213,6 +216,25 @@ namespace Tables {
 
                 mgTable[p][sq] = mgValue[base] + mgPestoTable[base][tableSquare];
                 egTable[p][sq] = egValue[base] + egPestoTable[base][tableSquare];
+            }
+        }
+
+        for (int sq = 0; sq < 64; sq++) {
+            int rank = sq / 8;
+            int file = sq % 8;
+
+            whitePassedMask[sq] = 0ULL;
+            for (int r = rank + 1; r < 8; r++) {
+                whitePassedMask[sq] |= (1ULL << (r * 8 + file));
+                if (file > 0) whitePassedMask[sq] |= (1ULL << (r * 8 + file - 1));
+                if (file < 7) whitePassedMask[sq] |= (1ULL << (r * 8 + file + 1));
+            }
+
+            blackPassedMask[sq] = 0ULL;
+            for (int r = rank - 1; r >= 0; r--) {
+                blackPassedMask[sq] |= (1ULL << (r * 8 + file));
+                if (file > 0) blackPassedMask[sq] |= (1ULL << (r * 8 + file - 1));
+                if (file < 7) blackPassedMask[sq] |= (1ULL << (r * 8 + file + 1));
             }
         }
     }

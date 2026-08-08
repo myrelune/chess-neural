@@ -149,48 +149,7 @@ void Board::reset() {
     zobristKey = computeZobristKey();
 }
 
-void Board::setPiece(Square square, Piece piece) {
-    if (piece == Piece::None)
-        return;
 
-    int sq = static_cast<int>(square);
-
-    BitboardOps::setBit(pieces[pieceIndex(piece)], sq);
-    mailbox[sq] = piece;
-
-    if (pieceColor(piece) == Color::White)
-        BitboardOps::setBit(whitePieces, sq);
-    else
-        BitboardOps::setBit(blackPieces, sq);
-
-    BitboardOps::setBit(occupied, sq);
-}
-
-// O(1) — just read the mailbox
-Piece Board::pieceAt(Square square) const {
-    int sq = static_cast<int>(square);
-    if (sq < 0 || sq >= 64)
-        return Piece::None;
-    return mailbox[sq];
-}
-
-void Board::removePiece(Square square) {
-    int sq = static_cast<int>(square);
-    Piece piece = mailbox[sq];
-
-    if (piece == Piece::None)
-        return;
-
-    BitboardOps::popBit(pieces[pieceIndex(piece)], sq);
-    mailbox[sq] = Piece::None;
-
-    if (pieceColor(piece) == Color::White)
-        BitboardOps::popBit(whitePieces, sq);
-    else
-        BitboardOps::popBit(blackPieces, sq);
-
-    BitboardOps::popBit(occupied, sq);
-}
 
 void Board::printBoard() const {
     for (int rank = 7; rank >= 0; rank--) {

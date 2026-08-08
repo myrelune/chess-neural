@@ -91,29 +91,13 @@ int Evaluate::evaluatePawnStructure(const Board& board) {
     Bitboard tempWp = whitePawns;
     while (tempWp) {
         int sq = BitboardOps::popLSB(tempWp);
-        int rank = sq / 8;
-        int file = sq % 8;
-        Bitboard frontSpan = 0ULL;
-        for (int r = rank + 1; r < 8; r++) {
-            frontSpan |= 1ULL << (r * 8 + file);
-            if (file > 0) frontSpan |= 1ULL << (r * 8 + file - 1);
-            if (file < 7) frontSpan |= 1ULL << (r * 8 + file + 1);
-        }
-        if (!(blackPawns & frontSpan)) score += passedBonus[rank];
+        if (!(blackPawns & Tables::whitePassedMask[sq])) score += passedBonus[sq / 8];
     }
 
     Bitboard tempBp = blackPawns;
     while (tempBp) {
         int sq = BitboardOps::popLSB(tempBp);
-        int rank = sq / 8;
-        int file = sq % 8;
-        Bitboard frontSpan = 0ULL;
-        for (int r = rank - 1; r >= 0; r--) {
-            frontSpan |= 1ULL << (r * 8 + file);
-            if (file > 0) frontSpan |= 1ULL << (r * 8 + file - 1);
-            if (file < 7) frontSpan |= 1ULL << (r * 8 + file + 1);
-        }
-        if (!(whitePawns & frontSpan)) score -= passedBonus[7 - rank];
+        if (!(whitePawns & Tables::blackPassedMask[sq])) score -= passedBonus[7 - (sq / 8)];
     }
 
     return score;

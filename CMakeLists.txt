@@ -29,4 +29,11 @@ add_executable(
 )
 
 target_include_directories(chess PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+
+if(NOT MSVC)
+    target_compile_options(chess PRIVATE -O3 -march=native)
+else()
+    target_compile_options(chess PRIVATE /O2 /arch:AVX2)
+endif()
+
+set_target_properties(chess PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
