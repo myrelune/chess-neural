@@ -1,9 +1,21 @@
 #include "evaluate.h"
 #include "tables.h"
 #include "../attacks/attacks.h"
+#include <array>
 
 namespace {
 constexpr Bitboard FILE_A = 0x0101010101010101ULL;
+constexpr Bitboard DARK_SQUARES = 0x55AA55AA55AA55AAULL;
+constexpr size_t EVAL_CACHE_SIZE = 1ULL << 16;
+
+struct EvalCacheEntry {
+    uint64_t key = 0;
+    int score = 0;
+};
+
+// A direct-mapped cache is deliberately small enough to remain cache-local.
+// Evaluation is position-pure, and the Zobrist key includes the side to move.
+std::array<EvalCacheEntry, EVAL_CACHE_SIZE> evalCache{};
 
 Bitboard fileMask(int file) {
     return FILE_A << file;
@@ -200,7 +212,9 @@ int Evaluate::evaluateKingSafety(const Board& board, int gamePhase) {
     Square wk = static_cast<Square>(BitboardOps::getLSB(whiteKing));
     Square bk = static_cast<Square>(BitboardOps::getLSB(blackKing));
 
-    auto pawnShield = [&](Square king, Color color) {
+    const Bitboard whitePawns = board.getPieces(Piece::WhitePawn);
+    const Bitboard blackPawns = board.getPieces(Piece::BlackPawn);
+    auto pawnShield = [&](Square king, Color color, Bitboard ownPawns, Bitboard enemyPawns) {
         int penalty = 0;
         int sq = static_cast<int>(king);
         int rank = sq / 8;
@@ -217,16 +231,23 @@ int Evaluate::evaluateKingSafety(const Board& board, int gamePhase) {
                 penalty += 3;
 
             Bitboard mask = fileMask(f);
-            Bitboard ownPawns = color == Color::White ? board.getPieces(Piece::WhitePawn) : board.getPieces(Piece::BlackPawn);
-            Bitboard enemyPawns = color == Color::White ? board.getPieces(Piece::BlackPawn) : board.getPieces(Piece::WhitePawn);
             if (!(ownPawns & mask)) penalty += 10;
             if (!(ownPawns & mask) && !(enemyPawns & mask)) penalty += 8;
         }
         return penalty;
     };
 
-    int whitePenalty = pawnShield(wk, Color::White) + kingAttackUnits(board, wk, Color::Black) * 4;
-    int blackPenalty = pawnShield(bk, Color::Black) + kingAttackUnits(board, bk, Color::White) * 4;
+    int whitePenalty = pawnShield(wk, Color::White, whitePawns, blackPawns);
+    int blackPenalty = pawnShield(bk, Color::Black, blackPawns, whitePawns);
+
+    // Sliding attack-zone analysis is valuable in queen middlegames but costs
+    // several magic lookups per evaluation.  Pawn cover remains active in all
+    // phases; the expensive tactical term is only relevant with both queens
+    // on the board and enough remaining material to mount an attack.
+    if (gamePhase >= 10 && board.getPieces(Piece::WhiteQueen) && board.getPieces(Piece::BlackQueen)) {
+        whitePenalty += kingAttackUnits(board, wk, Color::Black) * 4;
+        blackPenalty += kingAttackUnits(board, bk, Color::White) * 4;
+    }
 
     // King exposure matters far less after the heavy pieces have left.
     score += ((blackPenalty - whitePenalty) * gamePhase) / 24;
@@ -302,19 +323,15 @@ int Evaluate::evaluateMinorPieceStructure(const Board& board) {
     score += outposts(Piece::WhiteKnight, Color::White, whitePawns, blackPawns);
     score -= outposts(Piece::BlackKnight, Color::Black, blackPawns, whitePawns);
 
-    // Same-color pawn chains restrict a bishop's long-term scope.  The cap
-    // avoids double-counting the immediate blockage already in mobility.
+    // Same-color pawn chains restrict a bishop's long-term scope.  A color
+    // mask turns this into two popcounts instead of scanning every pawn.
     auto badBishops = [&](Piece bishop, Bitboard pawns) {
         int count = 0;
         Bitboard bishops = board.getPieces(bishop);
         while (bishops) {
             int bishopSq = BitboardOps::popLSB(bishops);
             const bool darkSquare = ((bishopSq / 8) + (bishopSq % 8)) % 2 != 0;
-            Bitboard copy = pawns;
-            while (copy) {
-                int pawnSq = BitboardOps::popLSB(copy);
-                if ((((pawnSq / 8) + (pawnSq % 8)) % 2 != 0) == darkSquare) ++count;
-            }
+            count += BitboardOps::countBits(pawns & (darkSquare ? DARK_SQUARES : ~DARK_SQUARES));
         }
         return std::min(count * 3, 24);
     };
@@ -337,6 +354,10 @@ int Evaluate::evaluateTempo(const Board& board) {
 }
 
 int Evaluate::evaluate(const Board& board) {
+    const uint64_t key = board.getZobristKey();
+    EvalCacheEntry& cached = evalCache[key & (EVAL_CACHE_SIZE - 1)];
+    if (cached.key == key) return cached.score;
+
     int score = 0;
     int gamePhase = 0;
 
@@ -349,5 +370,7 @@ int Evaluate::evaluate(const Board& board) {
     score += evaluateMinorPieceStructure(board);
     score += evaluateTempo(board);
 
-    return (board.getSideToMove() == Color::White) ? score : -score;
+    const int result = (board.getSideToMove() == Color::White) ? score : -score;
+    cached = {key, result};
+    return result;
 }

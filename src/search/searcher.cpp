@@ -18,39 +18,28 @@ namespace {
         }
     }
 
-    bool isPawn(Piece piece) {
-        return piece == Piece::WhitePawn || piece == Piece::BlackPawn;
-    }
-
-    /* Static exchange evaluation.  It repeatedly selects the least valuable
-        attacker of the contested square and updates x-rays after each swap. */
+    // Standard least-valuable-attacker SEE.  It is intentionally used only
+    // for important exchanges near the root (see scoreMove), so its tactical
+    // ordering benefit does not turn into a quiescence-node bottleneck.
     int staticExchangeEval(const Board& board, Move move) {
-        const int to = static_cast<int>(move.getToSquare());
         const int from = static_cast<int>(move.getFromSquare());
-        Piece moving = board.pieceAt(move.getFromSquare());
-        Piece captured = board.pieceAt(move.getToSquare());
-        if (moving == Piece::None) return 0;
+        const int to = static_cast<int>(move.getToSquare());
+        const Piece moving = board.pieceAt(move.getFromSquare());
+        const Piece captured = board.pieceAt(move.getToSquare());
+        if (moving == Piece::None || captured == Piece::None) return 0;
 
         Bitboard pieces[12];
         for (int p = 0; p < 12; ++p) pieces[p] = board.getPieces(static_cast<Piece>(p + 1));
 
-        const bool enPassant = isPawn(moving) && captured == Piece::None &&
-            board.getEnPassantSquare() == move.getToSquare();
-        const int capturedSq = enPassant ? to + (pieceColor(moving) == Color::White ? -8 : 8) : to;
-        if (enPassant) captured = pieceColor(moving) == Color::White ? Piece::BlackPawn : Piece::WhitePawn;
-
-        Piece promoted = move.promotion == Piece::None ? moving : move.promotion;
-        int gain[32] = { getPieceValue(captured) + getPieceValue(promoted) - getPieceValue(moving) };
+        int gain[32] = { getPieceValue(captured) };
         Bitboard occupied = board.getOccupied();
         pieces[pieceIndex(moving)] &= ~(1ULL << from);
-        if (captured != Piece::None) pieces[pieceIndex(captured)] &= ~(1ULL << capturedSq);
-        pieces[pieceIndex(promoted)] |= (1ULL << to);
+        pieces[pieceIndex(captured)] &= ~(1ULL << to);
+        pieces[pieceIndex(moving)] |= (1ULL << to);
         occupied &= ~(1ULL << from);
-        occupied &= ~(1ULL << capturedSq);
-        occupied |= (1ULL << to);
 
         Color side = pieceColor(moving) == Color::White ? Color::Black : Color::White;
-        Piece onTarget = promoted;
+        Piece onTarget = moving;
         int depth = 0;
         while (depth < 30) {
             const int offset = side == Color::White ? 0 : 6;
@@ -71,6 +60,7 @@ namespace {
                     attacker = static_cast<Piece>(offset + type + 1);
                 }
             }
+
             ++depth;
             gain[depth] = getPieceValue(onTarget) - gain[depth - 1];
             pieces[pieceIndex(onTarget)] &= ~(1ULL << to);
@@ -80,6 +70,7 @@ namespace {
             onTarget = attacker;
             side = side == Color::White ? Color::Black : Color::White;
         }
+
         while (depth > 0) {
             --depth;
             gain[depth] = -std::max(-gain[depth], gain[depth + 1]);
@@ -121,10 +112,16 @@ int Searcher::scoreMove(const Board& board, Move move, Move ttMove, int ply) {
     if (move == bestMoveFound) return 25000;
 
     Piece target = board.pieceAt(move.getToSquare());
-    if (target != Piece::None || move.promotion != Piece::None ||
-        (isPawn(board.pieceAt(move.getFromSquare())) && board.getEnPassantSquare() == move.getToSquare())) {
+    if (target != Piece::None) {
         Piece attacker = board.pieceAt(move.getFromSquare());
-        return 20000 + staticExchangeEval(board, move) + getPieceValue(target) - (getPieceValue(attacker) / 10);
+        int score = 20000 + getPieceValue(target) - (getPieceValue(attacker) / 10);
+
+        // SEE is most valuable for exchanges of real material.  Restricting
+        // it to the upper plies avoids paying for it in every qsearch node.
+        if (ply <= 3 && (getPieceValue(target) >= 320 || getPieceValue(attacker) >= 500)) {
+            score += staticExchangeEval(board, move);
+        }
+        return score;
     }
 
     if (ply < 64) {
