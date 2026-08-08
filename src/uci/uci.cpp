@@ -2,11 +2,33 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <chrono>
 
 #include "../board/board.h"
 #include "../movegen/movegen.h"
 #include "../movegen/move.h"
 #include "../search/searcher.h"
+
+namespace {
+    unsigned long long perft(int depth, Board& board) {
+        if (depth == 0) return 1ULL;
+
+        MoveList pseudoMoves = MoveGen::generateMoves(board);
+        unsigned long long nodes = 0;
+
+        for (int i = 0; i < pseudoMoves.count; ++i) {
+            Undo undo;
+            if (!board.makeMove(pseudoMoves.moves[i], undo)) {
+                continue;
+            }
+
+            nodes += perft(depth - 1, board);
+
+            board.unmakeMove(pseudoMoves.moves[i], undo);
+        }
+        return nodes;
+    }
+}
 
 namespace Uci {
     void loop() {
@@ -45,6 +67,21 @@ namespace Uci {
             }
             else if (token == "ucinewgame") {
                 board.reset();
+            }
+            else if (token == "perft") {
+                int depth = 1;
+                ss >> depth;
+
+                auto start = std::chrono::high_resolution_clock::now();
+                unsigned long long totalNodes = perft(depth, board);
+                auto end = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+                std::cout << "--- Perft Results ---\n"
+                          << "Depth: " << depth << "\n"
+                          << "Nodes: " << totalNodes << "\n"
+                          << "Time:  " << duration << " ms\n"
+                          << "---------------------\n" << std::flush;
             }
             else if (token == "position") {
                 std::string subtoken;

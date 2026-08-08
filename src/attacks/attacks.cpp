@@ -1,7 +1,5 @@
 #include "attacks.h"
 #include "../board/board.h"
-#include <iostream>
-#include <random>
 #include <vector>
 #include <algorithm>
 
@@ -150,7 +148,7 @@ namespace Attacks {
     uint64_t findMagicNumber(int sq, int bitCount, bool isRook) {
         Bitboard mask = isRook ? maskRook(sq) : maskBishop(sq);
         int n = 1 << bitCount;
-        
+
         std::vector<Bitboard> occupancies(n);
         std::vector<Bitboard> attacks(n);
 
@@ -171,7 +169,7 @@ namespace Attacks {
 
         while (true) {
             uint64_t candidate = random64() & random64() & random64();
-            
+
             if (BitboardOps::countBits((candidate * mask) & 0xFF00000000000000ULL) < 6) continue;
 
             std::fill(usedAttacks.begin(), usedAttacks.end(), 0ULL);
@@ -208,30 +206,36 @@ namespace Attacks {
         return bishopAttacks[sq][occupied];
     }
 
-    // Attack Validation Routine 
+    // Attack Validation Routine
     bool isSquareAttacked(const Board& board, Square square, Color attackerColor) {
-        Bitboard occ = board.getOccupied(); 
+        Bitboard occ = board.getOccupied();
         int sqIdx = static_cast<int>(square);
 
+        // Knights & Kings
         if (attackerColor == Color::White) {
             if (blackPawnAttacks[sqIdx] & board.getPieces(Piece::WhitePawn)) return true;
+            if (knightAttacks[sqIdx] & board.getPieces(Piece::WhiteKnight)) return true;
+            if (kingAttacks[sqIdx] & board.getPieces(Piece::WhiteKing)) return true;
         } else {
             if (whitePawnAttacks[sqIdx] & board.getPieces(Piece::BlackPawn)) return true;
+            if (knightAttacks[sqIdx] & board.getPieces(Piece::BlackKnight)) return true;
+            if (kingAttacks[sqIdx] & board.getPieces(Piece::BlackKing)) return true;
         }
 
-        if (knightAttacks[sqIdx] & board.getPieces(attackerColor == Color::White ? Piece::WhiteKnight : Piece::BlackKnight)) return true;
-        if (kingAttacks[sqIdx] & board.getPieces(attackerColor == Color::White ? Piece::WhiteKing : Piece::BlackKing)) return true;
-        
+        // Sliders
         Bitboard bishops = board.getPieces(attackerColor == Color::White ? Piece::WhiteBishop : Piece::BlackBishop);
-        Bitboard rooks   = board.getPieces(attackerColor == Color::White ? Piece::WhiteRook : Piece::BlackRook);
-        Bitboard queens  = board.getPieces(attackerColor == Color::White ? Piece::WhiteQueen : Piece::BlackQueen);
+        Bitboard rooks   = board.getPieces(attackerColor == Color::White ? Piece::WhiteRook   : Piece::BlackRook);
+        Bitboard queens  = board.getPieces(attackerColor == Color::White ? Piece::WhiteQueen  : Piece::BlackQueen);
 
-        if (bishopAttacksBB(square, occ) & (bishops | queens)) return true;
-        if (rookAttacksBB(square, occ) & (rooks | queens)) return true;
+        // Check diagonal sliders (Bishop + Queen)
+        if ((bishops | queens) && (bishopAttacksBB(square, occ) & (bishops | queens))) return true;
+
+        // Check orthogonal sliders (Rook + Queen)
+        if ((rooks | queens) && (rookAttacksBB(square, occ) & (rooks | queens))) return true;
 
         return false;
     }
-    
+
     void initSlidingPieces(bool isRook) {
         for (int sq = 0; sq < 64; ++sq) {
             Bitboard mask = isRook ? maskRook(sq) : maskBishop(sq);
@@ -240,7 +244,7 @@ namespace Attacks {
 
             int bitCount = BitboardOps::countBits(mask); // Using your helper
             int shift = 64 - bitCount;
-            
+
             if (isRook) rookShifts[sq] = shift;
             else bishopShifts[sq] = shift;
 

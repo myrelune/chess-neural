@@ -29,3 +29,4 @@ add_executable(
 )
 
 target_include_directories(chess PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
