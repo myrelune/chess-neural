@@ -188,6 +188,9 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
     for (int i = 0; i < moves.count; i++) {
         Move move = moves.moves[i];
         Undo undo;
+
+        bool isCapture = board.pieceAt(move.getToSquare()) != Piece::None;
+
         if (!board.makeMove(move, undo)) continue;
 
         Bitboard kingBitboard = board.getPieces((ourSide == Color::White) ? Piece::WhiteKing : Piece::BlackKing);
@@ -201,7 +204,6 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
 
         legalMovesCount++;
 
-        bool isCapture = board.pieceAt(move.getToSquare()) != Piece::None;
         bool givesCheck = false;
 
         int score = 0;
