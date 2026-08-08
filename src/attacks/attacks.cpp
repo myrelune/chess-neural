@@ -1,9 +1,9 @@
 #include "attacks.h"
+#include "../board/board.h"
 #include <iostream>
 #include <random>
 #include <vector>
 #include <algorithm>
-#include <bit> // Added for standard C++20 bitwise intrinsics
 
 namespace Attacks {
     Bitboard knightAttacks[64];
@@ -158,7 +158,7 @@ namespace Attacks {
             Bitboard occupied = 0ULL;
             Bitboard tempMask = mask;
             for (int b = 0; b < bitCount; ++b) {
-                int lsbIndex = std::countr_zero(tempMask); // Replaced __builtin_ctzll
+                int lsbIndex = BitboardOps::getLSB(tempMask);
                 tempMask &= tempMask - 1;
                 if ((i >> b) & 1) occupied |= (1ULL << lsbIndex);
             }
@@ -172,7 +172,7 @@ namespace Attacks {
         while (true) {
             uint64_t candidate = random64() & random64() & random64();
             
-            if (std::popcount((candidate * mask) & 0xFF00000000000000ULL) < 6) continue; // Replaced __builtin_popcountll
+            if (BitboardOps::countBits((candidate * mask) & 0xFF00000000000000ULL) < 6) continue;
 
             std::fill(usedAttacks.begin(), usedAttacks.end(), 0ULL);
             bool fail = false;
@@ -238,7 +238,7 @@ namespace Attacks {
             if (isRook) rookMasks[sq] = mask;
             else bishopMasks[sq] = mask;
 
-            int bitCount = std::popcount(mask); // Replaced __builtin_popcountll
+            int bitCount = BitboardOps::countBits(mask); // Using your helper
             int shift = 64 - bitCount;
             
             if (isRook) rookShifts[sq] = shift;
@@ -253,7 +253,7 @@ namespace Attacks {
                 Bitboard occupied = 0ULL;
                 Bitboard tempMask = mask;
                 for (int b = 0; b < bitCount; ++b) {
-                    int lsbIndex = std::countr_zero(tempMask); // Replaced __builtin_ctzll
+                    int lsbIndex = BitboardOps::getLSB(tempMask);
                     tempMask &= tempMask - 1;
                     if ((i >> b) & 1) occupied |= (1ULL << lsbIndex);
                 }

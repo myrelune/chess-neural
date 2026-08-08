@@ -8,7 +8,8 @@ using Bitboard = uint64_t;
 enum class Color : uint8_t
 {
     White,
-    Black
+    Black,
+    None
 };
 
 enum class Piece : uint8_t
@@ -64,5 +65,9 @@ inline Color pieceColor(Piece piece)
     if (piece >= Piece::WhitePawn && piece <= Piece::WhiteKing)
         return Color::White;
 
-    return Color::Black;
+    if (piece >= Piece::BlackPawn && piece <= Piece::BlackKing)
+        return Color::Black;
+
+    return Color::None;
 }
+
