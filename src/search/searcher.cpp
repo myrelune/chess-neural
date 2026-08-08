@@ -270,6 +270,25 @@ int Searcher::negamax(Board& board, int depth, int alpha, int beta, SearchInfo& 
 }
 
 Move Searcher::findBestMove(Board& board, const SearchLimits& limits) {
+    // 1. Check Opening Book First
+    auto bookMoves = book.getBookMoves(board.getZobristKey());
+    if (!bookMoves.empty()) {
+        auto bestEntry = *std::max_element(bookMoves.begin(), bookMoves.end(),
+            [](const PolyEntry& a, const PolyEntry& b) {
+                return a.weight < b.weight;
+            });
+
+        Move selectedMove = book.decodePolyglotMove(bestEntry.move, board);
+
+        MoveList legalMoves = MoveGen::generateLegalMoves(board);
+        for (int i = 0; i < legalMoves.count; i++) {
+            if (legalMoves.moves[i] == selectedMove) {
+                std::cout << "info string book hit move " << moveToUci(selectedMove) << std::endl;
+                return selectedMove;
+            }
+        }
+    }
+
     SearchInfo info;
     info.reset(limits.moveTimeMs);
     clearHeuristics();

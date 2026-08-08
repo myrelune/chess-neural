@@ -7,16 +7,66 @@
 #include <sstream>
 #include <cctype>
 
+uint64_t Board::polyglotEPKey(Square epSquare) const {
+    if (epSquare == Square::None)
+        return 0;
+
+    const int ep = static_cast<int>(epSquare);
+    const int file = ep & 7;
+
+    if (sideToMove == Color::White) {
+        if (file > 0) {
+            const int sq = ep - 9;
+            if (sq >= 0 && mailbox[sq] == Piece::WhitePawn)
+                return Zobrist::epKeys[file];
+        }
+
+        if (file < 7) {
+            const int sq = ep - 7;
+            if (sq >= 0 && mailbox[sq] == Piece::WhitePawn)
+                return Zobrist::epKeys[file];
+        }
+    }
+    else {
+        if (file > 0) {
+            const int sq = ep + 7;
+            if (sq < 64 && mailbox[sq] == Piece::BlackPawn)
+                return Zobrist::epKeys[file];
+        }
+
+        if (file < 7) {
+            const int sq = ep + 9;
+            if (sq < 64 && mailbox[sq] == Piece::BlackPawn)
+                return Zobrist::epKeys[file];
+        }
+    }
+
+    return 0;
+}
+
 inline void Board::zxorPiece(Piece p, int sq) {
-    zobristKey ^= Zobrist::pieceKeys[pieceIndex(p)][sq];
+    int polyPiece = Zobrist::polyglotPieceIndex(p);
+    zobristKey ^= Zobrist::pieceKeys[polyPiece][sq];
 }
+
 inline void Board::zxorCastling(uint8_t rights) {
-    zobristKey ^= Zobrist::castlingKeys[rights];
+    if (rights & WhiteKingSide)
+        zobristKey ^= Zobrist::castlingKeys[0];
+
+    if (rights & WhiteQueenSide)
+        zobristKey ^= Zobrist::castlingKeys[1];
+
+    if (rights & BlackKingSide)
+        zobristKey ^= Zobrist::castlingKeys[2];
+
+    if (rights & BlackQueenSide)
+        zobristKey ^= Zobrist::castlingKeys[3];
 }
+
 inline void Board::zxorEP(Square sq) {
-    if (sq != Square::None)
-        zobristKey ^= Zobrist::epKeys[static_cast<int>(sq) % 8];
+    zobristKey ^= polyglotEPKey(sq);
 }
+
 inline void Board::zxorSide() {
     zobristKey ^= Zobrist::sideKey;
 }
@@ -267,114 +317,260 @@ bool Board::makeMove(const Move& move, Undo& undo) {
     undo.halfmoveClock   = halfmoveClock;
     undo.capturedPiece   = Piece::None;
     undo.capturedSquare  = move.to;
-    undo.fullmoveNumber = fullmoveNumber;
-    undo.zobristKey      = zobristKey; // single save — unmakeMove just restores this
+    undo.fullmoveNumber  = fullmoveNumber;
+    undo.zobristKey      = zobristKey;
 
     if (sideToMove == Color::Black) {
         fullmoveNumber++;
     }
 
     Piece movingPiece = mailbox[static_cast<int>(move.from)];
-    if (movingPiece == Piece::None) return false;
+    if (movingPiece == Piece::None)
+        return false;
 
     Piece targetPiece = mailbox[static_cast<int>(move.to)];
 
-    // Side key flips every move
+    // Old side-to-move key
     zxorSide();
 
     // Old castling rights
     zxorCastling(castlingRights);
 
-    // Old en passant file (if any)
+    // Old EP key.
+    // polyglotEPKey() uses the OLD side to move here.
     zxorEP(enPassantSquare);
 
     // Moving piece leaves its source square
-    zxorPiece(movingPiece, static_cast<int>(move.from));
+    zxorPiece(
+        movingPiece,
+        static_cast<int>(move.from)
+    );
 
-    // Handle captures
+    // Normal capture
     if (targetPiece != Piece::None) {
         undo.capturedPiece = targetPiece;
-        zxorPiece(targetPiece, static_cast<int>(move.to));
+        undo.capturedSquare = move.to;
+
+        zxorPiece(
+            targetPiece,
+            static_cast<int>(move.to)
+        );
+
         removePiece(move.to);
     }
-    // Handle en passant capture
-    else if ((movingPiece == Piece::WhitePawn || movingPiece == Piece::BlackPawn)
-             && move.to == enPassantSquare) {
-        Square epPawnSquare = (sideToMove == Color::White)
-            ? static_cast<Square>(static_cast<int>(move.to) - 8)
-            : static_cast<Square>(static_cast<int>(move.to) + 8);
+
+    // En passant capture
+    else if ((movingPiece == Piece::WhitePawn ||
+              movingPiece == Piece::BlackPawn) &&
+             move.to == enPassantSquare) {
+
+        Square epPawnSquare =
+            (sideToMove == Color::White)
+                ? static_cast<Square>(
+                      static_cast<int>(move.to) - 8)
+                : static_cast<Square>(
+                      static_cast<int>(move.to) + 8);
+
         undo.capturedSquare = epPawnSquare;
-        undo.capturedPiece  = mailbox[static_cast<int>(epPawnSquare)];
-        zxorPiece(undo.capturedPiece, static_cast<int>(epPawnSquare));
-        removePiece(epPawnSquare);
+        undo.capturedPiece =
+            mailbox[static_cast<int>(epPawnSquare)];
+
+        if (undo.capturedPiece != Piece::None) {
+            zxorPiece(
+                undo.capturedPiece,
+                static_cast<int>(epPawnSquare)
+            );
+
+            removePiece(epPawnSquare);
+        }
     }
 
-    // Move primary piece
     removePiece(move.from);
-    Piece placedPiece = (move.promotion != Piece::None) ? move.promotion : movingPiece;
+
+    Piece placedPiece =
+        (move.promotion != Piece::None)
+            ? move.promotion
+            : movingPiece;
+
     setPiece(move.to, placedPiece);
-    zxorPiece(placedPiece, static_cast<int>(move.to));
 
-    // Handle castling rook
+    zxorPiece(
+        placedPiece,
+        static_cast<int>(move.to)
+    );
+
     if (movingPiece == Piece::WhiteKing) {
-        if (move.from == Square::E1 && move.to == Square::G1) {
-            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::H1));
+
+        // White O-O
+        if (move.from == Square::E1 &&
+            move.to == Square::G1) {
+
+            zxorPiece(
+                Piece::WhiteRook,
+                static_cast<int>(Square::H1)
+            );
+
             removePiece(Square::H1);
-            setPiece(Square::F1, Piece::WhiteRook);
-            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::F1));
-        } else if (move.from == Square::E1 && move.to == Square::C1) {
-            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::A1));
+
+            setPiece(
+                Square::F1,
+                Piece::WhiteRook
+            );
+
+            zxorPiece(
+                Piece::WhiteRook,
+                static_cast<int>(Square::F1)
+            );
+
+        // White O-O-O
+        } else if (move.from == Square::E1 &&
+                   move.to == Square::C1) {
+
+            zxorPiece(
+                Piece::WhiteRook,
+                static_cast<int>(Square::A1)
+            );
+
             removePiece(Square::A1);
-            setPiece(Square::D1, Piece::WhiteRook);
-            zxorPiece(Piece::WhiteRook, static_cast<int>(Square::D1));
+
+            setPiece(
+                Square::D1,
+                Piece::WhiteRook
+            );
+
+            zxorPiece(
+                Piece::WhiteRook,
+                static_cast<int>(Square::D1)
+            );
         }
+
     } else if (movingPiece == Piece::BlackKing) {
-        if (move.from == Square::E8 && move.to == Square::G8) {
-            zxorPiece(Piece::BlackRook, static_cast<int>(Square::H8));
+
+        // Black O-O
+        if (move.from == Square::E8 &&
+            move.to == Square::G8) {
+
+            zxorPiece(
+                Piece::BlackRook,
+                static_cast<int>(Square::H8)
+            );
+
             removePiece(Square::H8);
-            setPiece(Square::F8, Piece::BlackRook);
-            zxorPiece(Piece::BlackRook, static_cast<int>(Square::F8));
-        } else if (move.from == Square::E8 && move.to == Square::C8) {
-            zxorPiece(Piece::BlackRook, static_cast<int>(Square::A8));
+
+            setPiece(
+                Square::F8,
+                Piece::BlackRook
+            );
+
+            zxorPiece(
+                Piece::BlackRook,
+                static_cast<int>(Square::F8)
+            );
+
+        // Black O-O-O
+        } else if (move.from == Square::E8 &&
+                   move.to == Square::C8) {
+
+            zxorPiece(
+                Piece::BlackRook,
+                static_cast<int>(Square::A8)
+            );
+
             removePiece(Square::A8);
-            setPiece(Square::D8, Piece::BlackRook);
-            zxorPiece(Piece::BlackRook, static_cast<int>(Square::D8));
+
+            setPiece(
+                Square::D8,
+                Piece::BlackRook
+            );
+
+            zxorPiece(
+                Piece::BlackRook,
+                static_cast<int>(Square::D8)
+            );
         }
     }
 
-    // Update en passant square
     enPassantSquare = Square::None;
-    if (movingPiece == Piece::WhitePawn
-        && static_cast<int>(move.to) - static_cast<int>(move.from) == 16) {
-        enPassantSquare = static_cast<Square>(static_cast<int>(move.from) + 8);
-    } else if (movingPiece == Piece::BlackPawn
-               && static_cast<int>(move.from) - static_cast<int>(move.to) == 16) {
-        enPassantSquare = static_cast<Square>(static_cast<int>(move.from) - 8);
+
+    // White pawn double push
+    if (movingPiece == Piece::WhitePawn &&
+        static_cast<int>(move.to) -
+        static_cast<int>(move.from) == 16) {
+
+        enPassantSquare =
+            static_cast<Square>(
+                static_cast<int>(move.from) + 8
+            );
+
+    // Black pawn double push
+    } else if (movingPiece == Piece::BlackPawn &&
+               static_cast<int>(move.from) -
+               static_cast<int>(move.to) == 16) {
+
+        enPassantSquare =
+            static_cast<Square>(
+                static_cast<int>(move.from) - 8
+            );
     }
 
-    // Update castling rights
-    if (movingPiece == Piece::WhiteKing)
-        castlingRights &= ~(WhiteKingSide | WhiteQueenSide);
-    else if (movingPiece == Piece::BlackKing)
-        castlingRights &= ~(BlackKingSide | BlackQueenSide);
+    if (movingPiece == Piece::WhiteKing) {
+        castlingRights &=
+            ~(WhiteKingSide | WhiteQueenSide);
 
-    if (move.from == Square::A1 || move.to == Square::A1) castlingRights &= ~WhiteQueenSide;
-    if (move.from == Square::H1 || move.to == Square::H1) castlingRights &= ~WhiteKingSide;
-    if (move.from == Square::A8 || move.to == Square::A8) castlingRights &= ~BlackQueenSide;
-    if (move.from == Square::H8 || move.to == Square::H8) castlingRights &= ~BlackKingSide;
+    } else if (movingPiece == Piece::BlackKing) {
+        castlingRights &=
+            ~(BlackKingSide | BlackQueenSide);
+    }
 
-    // XOR in the new castling rights and new EP
+    // White queenside rook
+    if (move.from == Square::A1 ||
+        move.to   == Square::A1) {
+
+        castlingRights &= ~WhiteQueenSide;
+    }
+
+    // White kingside rook
+    if (move.from == Square::H1 ||
+        move.to   == Square::H1) {
+
+        castlingRights &= ~WhiteKingSide;
+    }
+
+    // Black queenside rook
+    if (move.from == Square::A8 ||
+        move.to   == Square::A8) {
+
+        castlingRights &= ~BlackQueenSide;
+    }
+
+    // Black kingside rook
+    if (move.from == Square::H8 ||
+        move.to   == Square::H8) {
+
+        castlingRights &= ~BlackKingSide;
+    }
+
     zxorCastling(castlingRights);
+
+    sideToMove =
+        (sideToMove == Color::White)
+            ? Color::Black
+            : Color::White;
+
     zxorEP(enPassantSquare);
 
-    if (movingPiece == Piece::WhitePawn || movingPiece == Piece::BlackPawn || targetPiece != Piece::None) {
+    if (movingPiece == Piece::WhitePawn ||
+        movingPiece == Piece::BlackPawn ||
+        targetPiece != Piece::None) {
+
         halfmoveClock = 0;
+
     } else {
         halfmoveClock++;
     }
 
-    sideToMove = (sideToMove == Color::White) ? Color::Black : Color::White;
     positionHistory[historyPly++] = zobristKey;
+
     return true;
 }
 
@@ -454,16 +650,28 @@ uint64_t Board::computeZobristKey() const {
 
     for (int sq = 0; sq < 64; ++sq) {
         Piece p = mailbox[sq];
-        if (p != Piece::None)
-            key ^= Zobrist::pieceKeys[pieceIndex(p)][sq];
+
+        if (p != Piece::None) {
+            int polyPiece = Zobrist::polyglotPieceIndex(p);
+            key ^= Zobrist::pieceKeys[polyPiece][sq];
+        }
     }
 
-    key ^= Zobrist::castlingKeys[castlingRights];
+    if (castlingRights & WhiteKingSide)
+        key ^= Zobrist::castlingKeys[0];
 
-    if (enPassantSquare != Square::None)
-        key ^= Zobrist::epKeys[static_cast<int>(enPassantSquare) % 8];
+    if (castlingRights & WhiteQueenSide)
+        key ^= Zobrist::castlingKeys[1];
 
-    if (sideToMove == Color::Black)
+    if (castlingRights & BlackKingSide)
+        key ^= Zobrist::castlingKeys[2];
+
+    if (castlingRights & BlackQueenSide)
+        key ^= Zobrist::castlingKeys[3];
+
+    key ^= polyglotEPKey(enPassantSquare);
+
+    if (sideToMove == Color::White)
         key ^= Zobrist::sideKey;
 
     return key;

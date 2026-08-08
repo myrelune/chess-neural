@@ -4,10 +4,12 @@
 #include "../board/board.h"
 #include "../movegen/movegen.h"
 #include "../eval/evaluate.h"
+#include "../polyglot/polyglot.h"
 
 #include <chrono>
 #include <cstdint>
 #include <vector>
+#include <iostream>
 
 constexpr int MATE_SCORE = 40000;
 constexpr int INFINITY_SCORE = 50000;
@@ -129,7 +131,12 @@ struct SearchInfo {
 
 class Searcher {
 public:
-    Searcher() : tt(16) {} // Initialize with 16MB Transposition Table by default
+    Searcher() : tt(16) {
+        // Load the Polyglot opening book on startup (adjust path if needed)
+        if (!book.loadEmbedded()) {
+            std::cout << "info string Warning: Could not load embedded opening book\n";
+        }
+    }
 
     Move findBestMove(Board& board, const SearchLimits& limits);
     void newGame() { tt.clear(); bestMoveFound = Move(); }
@@ -146,6 +153,7 @@ private:
     void clearHeuristics();
 
     TranspositionTable tt;
+    OpeningBook book;
     Move bestMoveFound;
     Move currentRootMove;
 

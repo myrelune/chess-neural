@@ -61,6 +61,8 @@ public:
     void makeNullMove(Undo& undo);
     void unmakeNullMove(const Undo& undo);
 
+    uint64_t polyglotEPKey(Square square) const;
+
 private:
     static constexpr size_t pieceIndex(Piece piece) {
         return static_cast<size_t>(piece) - 1;
